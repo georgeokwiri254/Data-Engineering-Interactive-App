@@ -5636,7 +5636,7 @@ def create_payload_analysis_charts(data, company_name):
         # Payload size by source system
         fig = px.box(data, x='source_system', y='payload_size_bytes',
                     title="Payload Size by Source System")
-        fig.update_xaxis(tickangle=45)
+        fig.update_xaxes(tickangle=45)
         st.plotly_chart(fig, use_container_width=True)
         
     with col2:
@@ -7578,7 +7578,7 @@ def show_big_data_scaling():
     st.header("📊 Big Data & Scaling")
     st.markdown("Understanding the 3 Vs of Big Data and scaling challenges")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples", "📚 Schema Info"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples", "📊 Live Data Analysis", "📚 Schema Info"])
     
     with tab1:
         st.subheader("The 3 Vs of Big Data")
@@ -7766,6 +7766,233 @@ def show_big_data_scaling():
                     st.markdown(f"• {challenge}")
 
     with tab4:
+        st.subheader("📊 Live Data Analysis")
+        st.markdown("Real synthetic data analysis from Amazon, Netflix, Uber, Airbnb, and NYSE")
+        
+        # Check if big data database exists
+        try:
+            import os
+            db_path = 'big_data_analytics.db'
+            
+            if not os.path.exists(db_path):
+                st.warning("🔧 Big Data database not initialized yet.")
+                if st.button("🚀 Initialize Big Data Database"):
+                    with st.spinner("Initializing database..."):
+                        try:
+                            import subprocess
+                            result = subprocess.run(['python3', 'simple_big_data_module.py'], 
+                                                  capture_output=True, text=True)
+                            if result.returncode == 0:
+                                st.success("✅ Database initialized successfully!")
+                                st.experimental_rerun()
+                            else:
+                                st.error(f"Initialization failed: {result.stderr}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+            else:
+                # Database exists - show live analysis
+                conn = sqlite3.connect(db_path)
+                
+                analysis_type = st.selectbox("Select Analysis Type:", [
+                    "📊 Data Volume Summary",
+                    "⚡ Query Performance Test", 
+                    "🏢 Business Insights",
+                    "🌍 Geographic Distribution"
+                ])
+                
+                if analysis_type == "📊 Data Volume Summary":
+                    st.markdown("### 📈 Real Data Volume Analysis")
+                    
+                    # Get table counts
+                    tables_info = [
+                        ('amazon_customers', 'Amazon Customers'),
+                        ('amazon_orders', 'Amazon Orders'), 
+                        ('amazon_order_items', 'Amazon Order Items'),
+                        ('netflix_users', 'Netflix Users'),
+                        ('netflix_viewing_events', 'Netflix Events'),
+                        ('uber_rides', 'Uber Rides'),
+                        ('airbnb_bookings', 'Airbnb Bookings'),
+                        ('nyse_trade_ticks', 'NYSE Ticks')
+                    ]
+                    
+                    volume_data = []
+                    total_records = 0
+                    
+                    for table_name, display_name in tables_info:
+                        try:
+                            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+                            count = cursor.fetchone()[0]
+                            volume_data.append({'Table': display_name, 'Records': count})
+                            total_records += count
+                        except:
+                            volume_data.append({'Table': display_name, 'Records': 0})
+                    
+                    # Create volume chart
+                    if volume_data:
+                        volume_df = pd.DataFrame(volume_data)
+                        
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            fig = px.bar(volume_df, x='Table', y='Records',
+                                       title='📊 Data Volume by Table',
+                                       color='Records',
+                                       color_continuous_scale='viridis')
+                            fig.update_xaxes(tickangle=45)
+                            st.plotly_chart(fig, use_container_width=True)
+                        
+                        with col2:
+                            st.metric("🎯 Total Records", f"{total_records:,}")
+                            
+                            # Scaling projection
+                            scaling_factor = st.slider("Production Scale Factor", 10, 1000, 100)
+                            projected = total_records * scaling_factor
+                            st.metric("🚀 Projected Scale", f"{projected:,}")
+                
+                elif analysis_type == "⚡ Query Performance Test":
+                    st.markdown("### ⚡ Live Performance Testing")
+                    
+                    query_type = st.selectbox("Query Type:", [
+                        "OLTP - Customer Lookup",
+                        "OLAP - Regional Analysis", 
+                        "Complex - Multi-table Join"
+                    ])
+                    
+                    if st.button("🚀 Run Performance Test"):
+                        if query_type == "OLTP - Customer Lookup":
+                            query = "SELECT * FROM amazon_customers WHERE customer_id = 'CUST_000001'"
+                            expected = "Point lookup - should be <10ms"
+                        elif query_type == "OLAP - Regional Analysis":
+                            query = """
+                            SELECT region, COUNT(*) as customers, AVG(lifetime_value_aed) as avg_ltv
+                            FROM amazon_customers 
+                            GROUP BY region
+                            ORDER BY customers DESC
+                            """
+                            expected = "Aggregation - should be <100ms"
+                        else:
+                            query = """
+                            SELECT c.region, COUNT(o.order_id) as orders, SUM(o.total_aed) as revenue
+                            FROM amazon_customers c
+                            JOIN amazon_orders o ON c.customer_id = o.customer_id
+                            WHERE o.order_status = 'completed'
+                            GROUP BY c.region
+                            """
+                            expected = "Complex join - may take 100ms+"
+                        
+                        start_time = time.time()
+                        try:
+                            df = pd.read_sql_query(query, conn)
+                            end_time = time.time()
+                            execution_time = (end_time - start_time) * 1000
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if execution_time < 10:
+                                    st.success(f"✅ Excellent: {execution_time:.2f} ms")
+                                elif execution_time < 100:
+                                    st.info(f"⏱️ Good: {execution_time:.2f} ms")
+                                else:
+                                    st.warning(f"⏳ Slow: {execution_time:.2f} ms")
+                                st.markdown(f"*{expected}*")
+                            
+                            with col2:
+                                st.metric("📊 Rows Returned", len(df))
+                                if len(df) > 0:
+                                    st.dataframe(df.head(), use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Query failed: {e}")
+                
+                elif analysis_type == "🏢 Business Insights":
+                    st.markdown("### 🏢 Live Business Intelligence")
+                    
+                    company = st.selectbox("Select Company:", [
+                        "🛒 Amazon", "🎬 Netflix", "🚗 Uber", "🏠 Airbnb"
+                    ])
+                    
+                    if company == "🛒 Amazon":
+                        # Regional revenue analysis
+                        regional_query = """
+                        SELECT c.region, COUNT(o.order_id) as orders, 
+                               AVG(o.total_aed) as avg_order_value,
+                               SUM(o.total_aed) as total_revenue
+                        FROM amazon_customers c
+                        JOIN amazon_orders o ON c.customer_id = o.customer_id
+                        WHERE o.order_status = 'completed'
+                        GROUP BY c.region
+                        ORDER BY total_revenue DESC
+                        """
+                        try:
+                            df = pd.read_sql_query(regional_query, conn)
+                            if not df.empty:
+                                fig = px.bar(df, x='region', y='total_revenue',
+                                           title='💰 Revenue by Region',
+                                           color='avg_order_value',
+                                           color_continuous_scale='blues')
+                                st.plotly_chart(fig, use_container_width=True)
+                                st.dataframe(df, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Analysis failed: {e}")
+                    
+                    elif company == "🎬 Netflix":
+                        # Content engagement analysis
+                        content_query = """
+                        SELECT c.genre_primary, COUNT(ve.event_id) as events,
+                               COUNT(DISTINCT ve.user_id) as unique_viewers,
+                               AVG(ve.watch_duration_sec) as avg_watch_time
+                        FROM netflix_content c
+                        JOIN netflix_viewing_events ve ON c.content_id = ve.content_id
+                        GROUP BY c.genre_primary
+                        ORDER BY events DESC
+                        """
+                        try:
+                            df = pd.read_sql_query(content_query, conn)
+                            if not df.empty:
+                                df['avg_watch_minutes'] = df['avg_watch_time'] / 60
+                                fig = px.scatter(df, x='unique_viewers', y='avg_watch_minutes',
+                                               size='events', hover_name='genre_primary',
+                                               title='🎭 Content Engagement by Genre')
+                                st.plotly_chart(fig, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Analysis failed: {e}")
+                
+                elif analysis_type == "🌍 Geographic Distribution":
+                    st.markdown("### 🌍 Geographic Analysis")
+                    
+                    # Customer distribution
+                    geo_query = """
+                    SELECT region, COUNT(*) as customers,
+                           AVG(lifetime_value_aed) as avg_ltv
+                    FROM amazon_customers
+                    GROUP BY region
+                    ORDER BY customers DESC
+                    """
+                    try:
+                        df = pd.read_sql_query(geo_query, conn)
+                        if not df.empty:
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                fig = px.pie(df, values='customers', names='region',
+                                           title='👥 Customer Distribution by Region')
+                                st.plotly_chart(fig, use_container_width=True)
+                            
+                            with col2:
+                                fig = px.bar(df, x='region', y='avg_ltv',
+                                           title='💰 Average LTV by Region',
+                                           color='avg_ltv',
+                                           color_continuous_scale='greens')
+                                st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Geographic analysis failed: {e}")
+                
+                conn.close()
+        
+        except Exception as e:
+            st.error(f"Database error: {e}")
+            st.info("💡 Try initializing the Big Data module first")
+
+    with tab5:
         st.subheader("📚 Schema Info - Big Data & Scaling")
         st.markdown("Explore example schemas for large-scale datasets.")
 
@@ -8129,7 +8356,7 @@ def show_company_case_study(company):
             content_stats = df.groupby('title')['watch_duration_min'].agg(['sum', 'mean', 'count']).reset_index()
             content_stats = content_stats.sort_values('sum', ascending=False).head(10)
             fig = px.bar(content_stats, x='title', y='sum', title='Top 10 Most Watched Shows (Total Minutes)')
-            fig.update_xaxis(tickangle=45)
+            fig.update_xaxes(tickangle=45)
             st.plotly_chart(fig, use_container_width=True)
             
             # Genre popularity
@@ -8311,7 +8538,7 @@ def show_olap_vs_oltp():
     # Real-world examples with interactive charts
     st.subheader("🏢 Real-World Implementation Examples")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Banking System", "E-commerce Platform", "Healthcare System", "📚 Schema Info"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Banking System", "E-commerce Platform", "Healthcare System", "⚡ Live Query Demo", "📚 Schema Info"])
     
     with tab1:
         st.subheader("🏦 Banking System - OLTP & OLAP")
@@ -8504,6 +8731,234 @@ def show_olap_vs_oltp():
         """)
 
     with tab4:
+        st.subheader("⚡ Live Query Performance Demo")
+        st.markdown("Interactive demonstration of OLTP vs OLAP query performance with real data")
+        
+        # Check if big data database exists for live demo
+        try:
+            import os
+            db_path = 'big_data_analytics.db'
+            
+            if not os.path.exists(db_path):
+                st.warning("🔧 Big Data database not initialized. Using existing module databases.")
+                # Fallback to existing databases
+                oltp_conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+                olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+                use_big_data_db = False
+            else:
+                # Use the comprehensive big data database
+                conn = sqlite3.connect(db_path)
+                use_big_data_db = True
+                st.success("✅ Using comprehensive Big Data database for live demo")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 🔄 OLTP Query Performance")
+                st.markdown("*Fast point lookups and simple transactions*")
+                
+                oltp_queries = {
+                    "Customer Lookup": {
+                        "query": "SELECT * FROM amazon_customers WHERE customer_id = 'CUST_000001'",
+                        "description": "Single customer lookup by ID"
+                    },
+                    "Order Details": {
+                        "query": """
+                        SELECT o.order_id, o.total_aed, c.region 
+                        FROM amazon_orders o 
+                        JOIN amazon_customers c ON o.customer_id = c.customer_id 
+                        WHERE o.order_id = 'ORDER_00000001'
+                        """,
+                        "description": "Order with customer join"
+                    },
+                    "User Profile": {
+                        "query": "SELECT * FROM netflix_users WHERE user_id = 'USER_000001'",
+                        "description": "Netflix user profile lookup"
+                    }
+                }
+                
+                selected_oltp = st.selectbox("Select OLTP Query:", list(oltp_queries.keys()))
+                
+                if st.button("🚀 Execute OLTP Query", key="oltp_demo"):
+                    query_info = oltp_queries[selected_oltp]
+                    start_time = time.time()
+                    
+                    try:
+                        if use_big_data_db:
+                            df = pd.read_sql_query(query_info["query"], conn)
+                        else:
+                            # Try both connections for fallback
+                            try:
+                                df = pd.read_sql_query(query_info["query"], oltp_conn)
+                            except:
+                                df = pd.read_sql_query(query_info["query"], olap_conn)
+                        
+                        end_time = time.time()
+                        execution_time = (end_time - start_time) * 1000
+                        
+                        # Performance assessment
+                        if execution_time < 10:
+                            st.success(f"✅ **Excellent**: {execution_time:.2f} ms")
+                            performance = "Excellent"
+                        elif execution_time < 50:
+                            st.info(f"⏱️ **Good**: {execution_time:.2f} ms") 
+                            performance = "Good"
+                        else:
+                            st.warning(f"⏳ **Needs Optimization**: {execution_time:.2f} ms")
+                            performance = "Slow"
+                        
+                        st.markdown(f"**Query**: {query_info['description']}")
+                        st.metric("Records Returned", len(df))
+                        
+                        if len(df) > 0:
+                            with st.expander("📄 Query Results"):
+                                st.dataframe(df, use_container_width=True)
+                                
+                    except Exception as e:
+                        st.error(f"Query failed: {e}")
+            
+            with col2:
+                st.markdown("### 📊 OLAP Query Performance") 
+                st.markdown("*Complex aggregations and analytics*")
+                
+                olap_queries = {
+                    "Regional Revenue": {
+                        "query": """
+                        SELECT c.region, COUNT(o.order_id) as orders,
+                               SUM(o.total_aed) as total_revenue,
+                               AVG(o.total_aed) as avg_order_value
+                        FROM amazon_customers c
+                        LEFT JOIN amazon_orders o ON c.customer_id = o.customer_id
+                        WHERE o.order_status = 'completed'
+                        GROUP BY c.region
+                        ORDER BY total_revenue DESC
+                        """,
+                        "description": "Revenue aggregation by region"
+                    },
+                    "Content Analytics": {
+                        "query": """
+                        SELECT c.genre_primary, 
+                               COUNT(ve.event_id) as total_events,
+                               COUNT(DISTINCT ve.user_id) as unique_viewers,
+                               AVG(ve.watch_duration_sec) as avg_watch_time
+                        FROM netflix_content c
+                        LEFT JOIN netflix_viewing_events ve ON c.content_id = ve.content_id
+                        GROUP BY c.genre_primary
+                        ORDER BY total_events DESC
+                        """,
+                        "description": "Netflix content engagement analysis"
+                    },
+                    "Market Performance": {
+                        "query": """
+                        SELECT ticker,
+                               COUNT(*) as data_points,
+                               AVG(return_1m * 10000) as avg_return_bps,
+                               AVG(volume_shares) as avg_volume
+                        FROM nyse_features_minute
+                        GROUP BY ticker
+                        ORDER BY avg_volume DESC
+                        LIMIT 10
+                        """,
+                        "description": "NYSE ticker performance summary"
+                    }
+                }
+                
+                selected_olap = st.selectbox("Select OLAP Query:", list(olap_queries.keys()))
+                
+                if st.button("📊 Execute OLAP Query", key="olap_demo"):
+                    query_info = olap_queries[selected_olap]
+                    start_time = time.time()
+                    
+                    try:
+                        if use_big_data_db:
+                            df = pd.read_sql_query(query_info["query"], conn)
+                        else:
+                            # Try both connections for fallback
+                            try:
+                                df = pd.read_sql_query(query_info["query"], oltp_conn)
+                            except:
+                                df = pd.read_sql_query(query_info["query"], olap_conn)
+                        
+                        end_time = time.time()
+                        execution_time = (end_time - start_time) * 1000
+                        
+                        # Performance assessment for OLAP
+                        if execution_time < 100:
+                            st.success(f"✅ **Excellent**: {execution_time:.2f} ms")
+                        elif execution_time < 1000:
+                            st.info(f"⏱️ **Good**: {execution_time:.2f} ms")
+                        else:
+                            st.warning(f"⏳ **Complex Query**: {execution_time:.2f} ms")
+                        
+                        st.markdown(f"**Query**: {query_info['description']}")
+                        st.metric("Aggregated Rows", len(df))
+                        
+                        if len(df) > 0:
+                            with st.expander("📊 Query Results & Visualization"):
+                                st.dataframe(df, use_container_width=True)
+                                
+                                # Auto-create simple visualization
+                                if len(df) > 1 and len(df.columns) >= 2:
+                                    numeric_cols = df.select_dtypes(include=[np.number]).columns
+                                    if len(numeric_cols) >= 1:
+                                        x_col = df.columns[0]  
+                                        y_col = numeric_cols[0]
+                                        
+                                        fig = px.bar(df.head(10), x=x_col, y=y_col,
+                                                   title=f"{selected_olap} Analysis")
+                                        st.plotly_chart(fig, use_container_width=True)
+                                        
+                    except Exception as e:
+                        st.error(f"Query failed: {e}")
+            
+            # Performance comparison summary
+            st.markdown("---")
+            st.markdown("### 📈 Query Performance Insights")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.info("**OLTP Target**: <10ms for point lookups")
+            with col2:  
+                st.info("**OLAP Target**: <1s for complex analytics")
+            with col3:
+                st.info("**Trade-off**: Latency vs Analytical Power")
+            
+            # Query optimization tips
+            with st.expander("💡 Query Optimization Tips"):
+                st.markdown("""
+                **OLTP Optimization:**
+                - Use primary key lookups when possible
+                - Create indexes on frequently queried columns
+                - Limit result sets with WHERE clauses
+                - Avoid complex JOINs in transactional queries
+                
+                **OLAP Optimization:**
+                - Use columnar storage for analytics
+                - Pre-aggregate common calculations
+                - Partition large tables by date/region
+                - Consider materialized views for frequent queries
+                
+                **General Tips:**
+                - Monitor query execution plans
+                - Update table statistics regularly
+                - Consider query caching for repeated patterns
+                """)
+            
+            # Close connections
+            if use_big_data_db:
+                conn.close()
+            else:
+                try:
+                    oltp_conn.close()
+                    olap_conn.close()
+                except:
+                    pass
+        
+        except Exception as e:
+            st.error(f"Live demo error: {e}")
+            st.info("💡 Please ensure the Big Data module is initialized for full functionality")
+
+    with tab5:
         st.subheader("📚 Schema Info - OLAP vs OLTP")
         st.markdown("Explore the database schemas for OLTP and OLAP examples.")
 
