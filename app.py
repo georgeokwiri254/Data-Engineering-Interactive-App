@@ -736,6 +736,818 @@ def generate_nyse_raw_landing(n_records=5000):
     return pd.DataFrame(data)
 
 # ============================================================================
+# MODULE 3: ETL/ELT PIPELINES - DATABASE & DATA GENERATORS
+# ============================================================================
+
+@st.cache_resource
+def init_module3_database():
+    """Initialize Module 3 SQLite database for ETL/ELT pipelines and staging data"""
+    conn = sqlite3.connect('module3_etl_pipelines.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # Set SQLite optimizations for ETL workloads
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.execute("PRAGMA cache_size = -64000")  # 64MB cache
+    cursor.execute("PRAGMA temp_store = memory")
+    
+    # Create staging tables for each company (Module 3 - Cleansed data)
+    staging_tables = [
+        """
+        CREATE TABLE IF NOT EXISTS staging_uber_rides (
+            ride_id TEXT PRIMARY KEY,
+            driver_id TEXT,
+            rider_id TEXT,
+            pickup_ts TEXT,
+            dropoff_ts TEXT,
+            pickup_coord TEXT,  -- JSON: {"lat": float, "lng": float}
+            dropoff_coord TEXT, -- JSON: {"lat": float, "lng": float}
+            distance_km REAL,
+            fare_aed REAL,
+            fare_base REAL,
+            fare_taxes REAL,
+            status TEXT,
+            ingest_latency_ms INTEGER,
+            etl_batch_id TEXT,
+            processed_ts TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS staging_netflix_events (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT,
+            content_id TEXT,
+            genre TEXT,
+            device TEXT,
+            event_ts TEXT,
+            playback_sec INTEGER,
+            country TEXT,
+            session_id TEXT,
+            video_quality TEXT,
+            etl_batch_id TEXT,
+            processed_ts TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS staging_amazon_orders (
+            order_id TEXT PRIMARY KEY,
+            customer_id TEXT,
+            order_ts TEXT,
+            items_count INTEGER,
+            subtotal_aed REAL,
+            shipping_aed REAL,
+            tax_aed REAL,
+            total_aed REAL,
+            fulfillment_center TEXT,
+            order_channel TEXT,
+            etl_batch_id TEXT,
+            processed_ts TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS staging_airbnb_reservations (
+            booking_id TEXT PRIMARY KEY,
+            host_id TEXT,
+            guest_id TEXT,
+            property_id TEXT,
+            checkin_date TEXT,
+            checkout_date TEXT,
+            nights INTEGER,
+            price_aed REAL,
+            status TEXT,
+            property_type TEXT,
+            city TEXT,
+            etl_batch_id TEXT,
+            processed_ts TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS staging_nyse_trades (
+            tick_id TEXT PRIMARY KEY,
+            ticker TEXT,
+            timestamp_ms TEXT,
+            price REAL,
+            size INTEGER,
+            venue TEXT,
+            is_auction INTEGER,  -- 0/1 boolean
+            trade_type TEXT,
+            etl_batch_id TEXT,
+            processed_ts TEXT
+        )
+        """
+    ]
+    
+    # Create ETL processing jobs metadata table (Module 6 - Job tracking)
+    processing_jobs_table = """
+        CREATE TABLE IF NOT EXISTS processing_jobs (
+            job_id TEXT PRIMARY KEY,
+            company TEXT,
+            job_name TEXT,
+            job_type TEXT,  -- batch/stream/micro-batch
+            engine TEXT,    -- spark/flink/airflow/dbt
+            input_path TEXT,
+            output_path TEXT,
+            records_in INTEGER,
+            records_out INTEGER,
+            start_ts TEXT,
+            end_ts TEXT,
+            duration_ms INTEGER,
+            status TEXT,    -- running/completed/failed/cancelled
+            error_msg TEXT,
+            resource_cpu_cores INTEGER,
+            resource_memory_gb INTEGER,
+            data_quality_score REAL,
+            batch_id TEXT
+        )
+    """
+    
+    # Create ETL manifests table for dataset lineage
+    manifests_table = """
+        CREATE TABLE IF NOT EXISTS etl_manifests (
+            manifest_id TEXT PRIMARY KEY,
+            dataset_name TEXT,
+            schema_version TEXT,
+            row_count INTEGER,
+            size_bytes INTEGER,
+            created_by TEXT,
+            created_ts TEXT,
+            source_dataset TEXT,
+            transformation_logic TEXT,
+            data_quality_checks TEXT,  -- JSON
+            partition_info TEXT        -- JSON
+        )
+    """
+    
+    # Execute table creation
+    tables = staging_tables + [processing_jobs_table, manifests_table]
+    for table_sql in tables:
+        cursor.execute(table_sql)
+    
+    # Create indexes for ETL performance
+    indexes = [
+        # Staging table indexes
+        "CREATE INDEX IF NOT EXISTS idx_uber_rides_processed_ts ON staging_uber_rides(processed_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_uber_rides_etl_batch ON staging_uber_rides(etl_batch_id)",
+        "CREATE INDEX IF NOT EXISTS idx_netflix_events_processed_ts ON staging_netflix_events(processed_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_netflix_events_user ON staging_netflix_events(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_amazon_orders_processed_ts ON staging_amazon_orders(processed_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_amazon_orders_customer ON staging_amazon_orders(customer_id)",
+        "CREATE INDEX IF NOT EXISTS idx_airbnb_reservations_processed_ts ON staging_airbnb_reservations(processed_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_airbnb_reservations_city ON staging_airbnb_reservations(city)",
+        "CREATE INDEX IF NOT EXISTS idx_nyse_trades_processed_ts ON staging_nyse_trades(processed_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_nyse_trades_ticker ON staging_nyse_trades(ticker)",
+        
+        # Processing jobs indexes
+        "CREATE INDEX IF NOT EXISTS idx_jobs_company ON processing_jobs(company)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_start_ts ON processing_jobs(start_ts)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_status ON processing_jobs(status)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_engine ON processing_jobs(engine)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_batch_id ON processing_jobs(batch_id)",
+        
+        # Manifests indexes
+        "CREATE INDEX IF NOT EXISTS idx_manifests_dataset ON etl_manifests(dataset_name)",
+        "CREATE INDEX IF NOT EXISTS idx_manifests_created_ts ON etl_manifests(created_ts)"
+    ]
+    
+    for index in indexes:
+        cursor.execute(index)
+    
+    conn.commit()
+    return conn
+
+def populate_module3_data(conn, company_name):
+    """Populate Module 3 database with synthetic ETL pipeline and staging data"""
+    cursor = conn.cursor()
+    
+    try:
+        # Check if data already exists
+        cursor.execute("SELECT COUNT(*) FROM processing_jobs WHERE company = ?", (company_name,))
+        job_count = cursor.fetchone()[0]
+        
+        if job_count > 0:
+            return  # Data already exists
+        
+        # Generate ETL job data
+        if company_name == "Uber":
+            jobs_data = generate_uber_etl_jobs(200)
+            staging_data = generate_uber_staging_data(8000)
+            manifests_data = generate_uber_etl_manifests(15)
+        elif company_name == "Netflix":
+            jobs_data = generate_netflix_etl_jobs(150)
+            staging_data = generate_netflix_staging_data(12000)
+            manifests_data = generate_netflix_etl_manifests(12)
+        elif company_name == "Amazon":
+            jobs_data = generate_amazon_etl_jobs(300)
+            staging_data = generate_amazon_staging_data(15000)
+            manifests_data = generate_amazon_etl_manifests(20)
+        elif company_name == "Airbnb":
+            jobs_data = generate_airbnb_etl_jobs(100)
+            staging_data = generate_airbnb_staging_data(6000)
+            manifests_data = generate_airbnb_etl_manifests(10)
+        elif company_name == "NYSE":
+            jobs_data = generate_nyse_etl_jobs(500)
+            staging_data = generate_nyse_staging_data(50000)
+            manifests_data = generate_nyse_etl_manifests(25)
+        
+        # Insert ETL jobs data
+        jobs_data.to_sql('processing_jobs', conn, if_exists='append', index=False, method='multi')
+        
+        # Insert staging data
+        staging_table_map = {
+            'Uber': 'staging_uber_rides',
+            'Netflix': 'staging_netflix_events',
+            'Amazon': 'staging_amazon_orders', 
+            'Airbnb': 'staging_airbnb_reservations',
+            'NYSE': 'staging_nyse_trades'
+        }
+        staging_data.to_sql(staging_table_map[company_name], conn, if_exists='append', index=False, method='multi')
+        
+        # Insert manifests data
+        manifests_data.to_sql('etl_manifests', conn, if_exists='append', index=False, method='multi')
+        
+        conn.commit()
+        
+    except Exception as e:
+        st.error(f"Error populating Module 3 data for {company_name}: {str(e)}")
+        raise e
+
+def query_module3_data(conn, query):
+    """Execute custom SQL queries on Module 3 database"""
+    return pd.read_sql_query(query, conn)
+
+# ============================================================================
+# MODULE 3: ETL/ELT PIPELINES - SYNTHETIC DATA GENERATORS
+# ============================================================================
+
+@st.cache_data
+def generate_uber_etl_jobs(n_jobs=200):
+    """Generate Uber ETL job execution data"""
+    np.random.seed(43)
+    
+    data = []
+    job_types = ['batch', 'stream', 'micro-batch']
+    engines = ['spark', 'flink', 'airflow', 'kafka-streams']
+    statuses = ['completed', 'failed', 'running', 'cancelled']
+    job_names = [
+        'rides-raw-to-staging', 'driver-location-stream', 'fare-calculation-batch',
+        'surge-pricing-realtime', 'trip-analytics-daily', 'payment-reconciliation',
+        'driver-performance-etl', 'rider-churn-prediction', 'fraud-detection-stream',
+        'geo-analytics-batch', 'demand-forecasting', 'earnings-summary-etl'
+    ]
+    
+    for i in range(n_jobs):
+        start_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        
+        # Realistic duration based on job type and engine
+        if np.random.choice(['spark', 'flink']) in engines:
+            duration_ms = int(np.random.lognormal(mean=8, sigma=1.2) * 1000)  # 3min to 2hrs typical
+        else:
+            duration_ms = int(np.random.lognormal(mean=6, sigma=1.5) * 1000)  # 30sec to 45min typical
+        
+        end_time = start_time + timedelta(milliseconds=duration_ms)
+        
+        records_in = int(np.random.lognormal(mean=10, sigma=2))  # 10K to 10M records
+        # Simulate data quality issues and processing efficiency
+        efficiency = np.random.beta(a=8, b=2)  # Most jobs are efficient
+        records_out = int(records_in * efficiency)
+        
+        status = np.random.choice(statuses, p=[0.85, 0.10, 0.03, 0.02])
+        
+        data.append({
+            'job_id': f"uber_job_{i:06d}_{start_time.strftime('%Y%m%d_%H%M%S')}",
+            'company': 'Uber',
+            'job_name': np.random.choice(job_names),
+            'job_type': np.random.choice(job_types, p=[0.6, 0.3, 0.1]),
+            'engine': np.random.choice(engines, p=[0.4, 0.25, 0.25, 0.1]),
+            'input_path': f"s3://uber-data-lake/raw/rides/{start_time.strftime('%Y/%m/%d')}",
+            'output_path': f"s3://uber-data-lake/staging/rides/{start_time.strftime('%Y/%m/%d')}",
+            'records_in': records_in,
+            'records_out': records_out if status == 'completed' else 0,
+            'start_ts': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_ts': end_time.strftime('%Y-%m-%d %H:%M:%S') if status in ['completed', 'failed'] else None,
+            'duration_ms': duration_ms if status in ['completed', 'failed'] else None,
+            'status': status,
+            'error_msg': 'OutOfMemoryError: Java heap space' if status == 'failed' else None,
+            'resource_cpu_cores': np.random.choice([4, 8, 16, 32]),
+            'resource_memory_gb': np.random.choice([16, 32, 64, 128]),
+            'data_quality_score': np.random.beta(a=9, b=1) * 100 if status == 'completed' else None,
+            'batch_id': f"batch_{start_time.strftime('%Y%m%d_%H')}"
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_uber_staging_data(n_records=8000):
+    """Generate Uber staging (cleansed) ride data"""
+    np.random.seed(43)
+    
+    data = []
+    statuses = ['completed', 'cancelled', 'ongoing']
+    cities = ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Fujairah']
+    
+    for i in range(n_records):
+        pickup_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        trip_duration = np.random.gamma(shape=2, scale=15)  # Average 30min trip
+        dropoff_time = pickup_time + timedelta(minutes=trip_duration)
+        
+        # Dubai coordinates (realistic)
+        pickup_lat = 25.1972 + np.random.normal(0, 0.1)
+        pickup_lng = 55.2744 + np.random.normal(0, 0.1)
+        dropoff_lat = pickup_lat + np.random.normal(0, 0.05)
+        dropoff_lng = pickup_lng + np.random.normal(0, 0.05)
+        
+        distance = np.random.lognormal(mean=2, sigma=1)  # 3-50km typical
+        base_fare = max(10, distance * np.random.uniform(2, 4))  # AED 2-4 per km
+        taxes = base_fare * 0.05  # 5% tax
+        total_fare = base_fare + taxes
+        
+        data.append({
+            'ride_id': f"uber_ride_{i:08d}",
+            'driver_id': f"driver_{np.random.randint(1000, 9999)}",
+            'rider_id': f"rider_{np.random.randint(10000, 99999)}",
+            'pickup_ts': pickup_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'dropoff_ts': dropoff_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'pickup_coord': json.dumps({"lat": round(pickup_lat, 6), "lng": round(pickup_lng, 6)}),
+            'dropoff_coord': json.dumps({"lat": round(dropoff_lat, 6), "lng": round(dropoff_lng, 6)}),
+            'distance_km': round(distance, 2),
+            'fare_aed': round(total_fare, 2),
+            'fare_base': round(base_fare, 2),
+            'fare_taxes': round(taxes, 2),
+            'status': np.random.choice(statuses, p=[0.85, 0.12, 0.03]),
+            'ingest_latency_ms': np.random.randint(100, 5000),
+            'etl_batch_id': f"etl_batch_{pickup_time.strftime('%Y%m%d_%H')}",
+            'processed_ts': (pickup_time + timedelta(minutes=np.random.randint(5, 30))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_uber_etl_manifests(n_manifests=15):
+    """Generate Uber ETL manifest data for dataset lineage"""
+    np.random.seed(43)
+    
+    data = []
+    datasets = ['raw_rides', 'staging_rides', 'aggregated_rides', 'driver_metrics', 'surge_data']
+    
+    for i in range(n_manifests):
+        created_time = datetime.now() - timedelta(days=np.random.randint(0, 30))
+        
+        data.append({
+            'manifest_id': f"uber_manifest_{i:04d}",
+            'dataset_name': np.random.choice(datasets),
+            'schema_version': f"v{np.random.randint(1, 5)}.{np.random.randint(0, 10)}",
+            'row_count': int(np.random.lognormal(mean=12, sigma=1.5)),
+            'size_bytes': int(np.random.lognormal(mean=20, sigma=2)),
+            'created_by': np.random.choice(['etl_service', 'data_engineer', 'airflow_dag']),
+            'created_ts': created_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source_dataset': 'raw_uber_events',
+            'transformation_logic': 'Clean nulls, standardize timestamps, calculate fares',
+            'data_quality_checks': json.dumps({"null_check": "passed", "schema_validation": "passed", "row_count_validation": "passed"}),
+            'partition_info': json.dumps({"partition_cols": ["date", "city"], "partition_count": np.random.randint(10, 100)})
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_etl_jobs(n_jobs=150):
+    """Generate Netflix ETL job execution data"""
+    np.random.seed(44)
+    
+    data = []
+    job_names = [
+        'viewing-events-etl', 'content-analytics-batch', 'user-profiles-stream',
+        'recommendation-training', 'content-encoding-pipeline', 'ab-test-analysis',
+        'viewing-quality-etl', 'subscription-analytics', 'content-popularity-batch',
+        'user-churn-prediction', 'content-metadata-sync', 'regional-analytics-etl'
+    ]
+    
+    for i in range(n_jobs):
+        start_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        duration_ms = int(np.random.lognormal(mean=7.5, sigma=1.3) * 1000)
+        end_time = start_time + timedelta(milliseconds=duration_ms)
+        
+        records_in = int(np.random.lognormal(mean=11, sigma=2))
+        efficiency = np.random.beta(a=8.5, b=1.5)
+        records_out = int(records_in * efficiency)
+        
+        status = np.random.choice(['completed', 'failed', 'running', 'cancelled'], p=[0.88, 0.08, 0.03, 0.01])
+        
+        data.append({
+            'job_id': f"netflix_job_{i:06d}_{start_time.strftime('%Y%m%d_%H%M%S')}",
+            'company': 'Netflix',
+            'job_name': np.random.choice(job_names),
+            'job_type': np.random.choice(['batch', 'stream', 'micro-batch'], p=[0.5, 0.35, 0.15]),
+            'engine': np.random.choice(['spark', 'flink', 'airflow', 'kafka-streams'], p=[0.45, 0.3, 0.2, 0.05]),
+            'input_path': f"s3://netflix-data-lake/raw/events/{start_time.strftime('%Y/%m/%d')}",
+            'output_path': f"s3://netflix-data-lake/staging/events/{start_time.strftime('%Y/%m/%d')}",
+            'records_in': records_in,
+            'records_out': records_out if status == 'completed' else 0,
+            'start_ts': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_ts': end_time.strftime('%Y-%m-%d %H:%M:%S') if status in ['completed', 'failed'] else None,
+            'duration_ms': duration_ms if status in ['completed', 'failed'] else None,
+            'status': status,
+            'error_msg': 'TimeoutException: Job exceeded maximum runtime' if status == 'failed' else None,
+            'resource_cpu_cores': np.random.choice([8, 16, 32, 64]),
+            'resource_memory_gb': np.random.choice([32, 64, 128, 256]),
+            'data_quality_score': np.random.beta(a=9.2, b=0.8) * 100 if status == 'completed' else None,
+            'batch_id': f"batch_{start_time.strftime('%Y%m%d_%H')}"
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_staging_data(n_records=12000):
+    """Generate Netflix staging (cleansed) viewing event data"""
+    np.random.seed(44)
+    
+    data = []
+    genres = ['Action', 'Comedy', 'Drama', 'Documentary', 'Horror', 'Romance', 'Sci-Fi', 'Thriller']
+    devices = ['Smart TV', 'Mobile', 'Desktop', 'Tablet', 'Gaming Console']
+    countries = ['AE', 'SA', 'EG', 'KW', 'QA', 'BH', 'OM', 'JO', 'LB', 'MA']
+    qualities = ['240p', '480p', '720p', '1080p', '4K']
+    
+    for i in range(n_records):
+        event_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        playback_duration = int(np.random.lognormal(mean=6, sigma=1.5))  # 5min to 3hrs
+        
+        data.append({
+            'event_id': f"netflix_event_{i:08d}",
+            'user_id': f"user_{np.random.randint(100000, 999999)}",
+            'content_id': f"content_{np.random.randint(1000, 9999)}",
+            'genre': np.random.choice(genres),
+            'device': np.random.choice(devices),
+            'event_ts': event_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'playback_sec': playback_duration,
+            'country': np.random.choice(countries),
+            'session_id': f"session_{np.random.randint(1000000, 9999999)}",
+            'video_quality': np.random.choice(qualities, p=[0.05, 0.1, 0.3, 0.45, 0.1]),
+            'etl_batch_id': f"etl_batch_{event_time.strftime('%Y%m%d_%H')}",
+            'processed_ts': (event_time + timedelta(minutes=np.random.randint(2, 15))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_etl_manifests(n_manifests=12):
+    """Generate Netflix ETL manifest data"""
+    np.random.seed(44)
+    
+    data = []
+    datasets = ['raw_viewing_events', 'staging_viewing_events', 'user_profiles', 'content_analytics', 'recommendation_features']
+    
+    for i in range(n_manifests):
+        created_time = datetime.now() - timedelta(days=np.random.randint(0, 30))
+        
+        data.append({
+            'manifest_id': f"netflix_manifest_{i:04d}",
+            'dataset_name': np.random.choice(datasets),
+            'schema_version': f"v{np.random.randint(2, 8)}.{np.random.randint(0, 15)}",
+            'row_count': int(np.random.lognormal(mean=13, sigma=1.8)),
+            'size_bytes': int(np.random.lognormal(mean=22, sigma=2.2)),
+            'created_by': np.random.choice(['streaming_etl', 'analytics_team', 'ml_pipeline']),
+            'created_ts': created_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source_dataset': 'raw_netflix_events',
+            'transformation_logic': 'Filter invalid sessions, enrich with content metadata, calculate watch time',
+            'data_quality_checks': json.dumps({"duplicate_check": "passed", "referential_integrity": "passed", "business_rules": "passed"}),
+            'partition_info': json.dumps({"partition_cols": ["date", "country", "device_type"], "partition_count": np.random.randint(50, 200)})
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_etl_jobs(n_jobs=300):
+    """Generate Amazon ETL job execution data"""
+    np.random.seed(45)
+    
+    data = []
+    job_names = [
+        'orders-raw-to-staging', 'inventory-sync-batch', 'customer-analytics-etl',
+        'product-recommendations', 'supply-chain-etl', 'pricing-optimization',
+        'fraud-detection-stream', 'sales-reporting-batch', 'search-analytics-etl',
+        'logistics-optimization', 'vendor-payments-etl', 'returns-processing'
+    ]
+    
+    for i in range(n_jobs):
+        start_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        duration_ms = int(np.random.lognormal(mean=8.2, sigma=1.4) * 1000)
+        end_time = start_time + timedelta(milliseconds=duration_ms)
+        
+        records_in = int(np.random.lognormal(mean=12, sigma=2.2))
+        efficiency = np.random.beta(a=8.8, b=1.2)
+        records_out = int(records_in * efficiency)
+        
+        status = np.random.choice(['completed', 'failed', 'running', 'cancelled'], p=[0.90, 0.07, 0.02, 0.01])
+        
+        data.append({
+            'job_id': f"amazon_job_{i:06d}_{start_time.strftime('%Y%m%d_%H%M%S')}",
+            'company': 'Amazon',
+            'job_name': np.random.choice(job_names),
+            'job_type': np.random.choice(['batch', 'stream', 'micro-batch'], p=[0.7, 0.2, 0.1]),
+            'engine': np.random.choice(['spark', 'flink', 'airflow', 'glue'], p=[0.3, 0.2, 0.3, 0.2]),
+            'input_path': f"s3://amazon-data-lake/raw/orders/{start_time.strftime('%Y/%m/%d')}",
+            'output_path': f"s3://amazon-data-lake/staging/orders/{start_time.strftime('%Y/%m/%d')}",
+            'records_in': records_in,
+            'records_out': records_out if status == 'completed' else 0,
+            'start_ts': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_ts': end_time.strftime('%Y-%m-%d %H:%M:%S') if status in ['completed', 'failed'] else None,
+            'duration_ms': duration_ms if status in ['completed', 'failed'] else None,
+            'status': status,
+            'error_msg': 'S3 Access Denied: Insufficient permissions' if status == 'failed' else None,
+            'resource_cpu_cores': np.random.choice([16, 32, 64, 128]),
+            'resource_memory_gb': np.random.choice([64, 128, 256, 512]),
+            'data_quality_score': np.random.beta(a=9.5, b=0.5) * 100 if status == 'completed' else None,
+            'batch_id': f"batch_{start_time.strftime('%Y%m%d_%H')}"
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_staging_data(n_records=15000):
+    """Generate Amazon staging (cleansed) order data"""
+    np.random.seed(45)
+    
+    data = []
+    fulfillment_centers = ['DXB1', 'AUH1', 'SHJ1', 'RUH1', 'JED1', 'KWI1']
+    channels = ['web', 'mobile_app', 'api', 'alexa', 'third_party']
+    
+    for i in range(n_records):
+        order_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        
+        items_count = np.random.poisson(lam=2) + 1  # 1-8 items typical
+        subtotal = np.random.lognormal(mean=4, sigma=1.5)  # AED 50-2000 typical
+        shipping = 0 if subtotal > 100 else np.random.uniform(10, 25)  # Free shipping over AED 100
+        tax_rate = 0.05  # 5% VAT in UAE
+        tax = subtotal * tax_rate
+        total = subtotal + shipping + tax
+        
+        data.append({
+            'order_id': f"amazon_order_{i:10d}",
+            'customer_id': f"customer_{np.random.randint(100000, 999999)}",
+            'order_ts': order_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'items_count': items_count,
+            'subtotal_aed': round(subtotal, 2),
+            'shipping_aed': round(shipping, 2),
+            'tax_aed': round(tax, 2),
+            'total_aed': round(total, 2),
+            'fulfillment_center': np.random.choice(fulfillment_centers),
+            'order_channel': np.random.choice(channels, p=[0.4, 0.35, 0.1, 0.05, 0.1]),
+            'etl_batch_id': f"etl_batch_{order_time.strftime('%Y%m%d_%H')}",
+            'processed_ts': (order_time + timedelta(minutes=np.random.randint(1, 10))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_etl_manifests(n_manifests=20):
+    """Generate Amazon ETL manifest data"""
+    np.random.seed(45)
+    
+    data = []
+    datasets = ['raw_orders', 'staging_orders', 'customer_segments', 'product_catalog', 'inventory_levels', 'sales_metrics']
+    
+    for i in range(n_manifests):
+        created_time = datetime.now() - timedelta(days=np.random.randint(0, 30))
+        
+        data.append({
+            'manifest_id': f"amazon_manifest_{i:04d}",
+            'dataset_name': np.random.choice(datasets),
+            'schema_version': f"v{np.random.randint(1, 6)}.{np.random.randint(0, 12)}",
+            'row_count': int(np.random.lognormal(mean=14, sigma=2)),
+            'size_bytes': int(np.random.lognormal(mean=24, sigma=2.5)),
+            'created_by': np.random.choice(['ecommerce_etl', 'analytics_pipeline', 'glue_job']),
+            'created_ts': created_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source_dataset': 'raw_amazon_events',
+            'transformation_logic': 'Validate orders, calculate totals, enrich with customer data',
+            'data_quality_checks': json.dumps({"price_validation": "passed", "customer_lookup": "passed", "inventory_check": "passed"}),
+            'partition_info': json.dumps({"partition_cols": ["date", "fulfillment_center"], "partition_count": np.random.randint(20, 150)})
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_etl_jobs(n_jobs=100):
+    """Generate Airbnb ETL job execution data"""
+    np.random.seed(46)
+    
+    data = []
+    job_names = [
+        'bookings-raw-to-staging', 'search-analytics-etl', 'host-performance-batch',
+        'pricing-recommendation', 'guest-review-nlp', 'occupancy-analytics',
+        'fraud-detection-ml', 'market-dynamics-etl', 'photo-quality-batch',
+        'calendar-optimization', 'payout-processing', 'trust-safety-etl'
+    ]
+    
+    for i in range(n_jobs):
+        start_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        duration_ms = int(np.random.lognormal(mean=7.8, sigma=1.6) * 1000)
+        end_time = start_time + timedelta(milliseconds=duration_ms)
+        
+        records_in = int(np.random.lognormal(mean=10.5, sigma=2))
+        efficiency = np.random.beta(a=8.2, b=1.8)
+        records_out = int(records_in * efficiency)
+        
+        status = np.random.choice(['completed', 'failed', 'running', 'cancelled'], p=[0.87, 0.09, 0.03, 0.01])
+        
+        data.append({
+            'job_id': f"airbnb_job_{i:06d}_{start_time.strftime('%Y%m%d_%H%M%S')}",
+            'company': 'Airbnb',
+            'job_name': np.random.choice(job_names),
+            'job_type': np.random.choice(['batch', 'stream', 'micro-batch'], p=[0.65, 0.25, 0.1]),
+            'engine': np.random.choice(['spark', 'flink', 'airflow', 'dbt'], p=[0.4, 0.2, 0.3, 0.1]),
+            'input_path': f"s3://airbnb-data-lake/raw/bookings/{start_time.strftime('%Y/%m/%d')}",
+            'output_path': f"s3://airbnb-data-lake/staging/bookings/{start_time.strftime('%Y/%m/%d')}",
+            'records_in': records_in,
+            'records_out': records_out if status == 'completed' else 0,
+            'start_ts': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_ts': end_time.strftime('%Y-%m-%d %H:%M:%S') if status in ['completed', 'failed'] else None,
+            'duration_ms': duration_ms if status in ['completed', 'failed'] else None,
+            'status': status,
+            'error_msg': 'DataFrameException: Column not found in source' if status == 'failed' else None,
+            'resource_cpu_cores': np.random.choice([8, 16, 32]),
+            'resource_memory_gb': np.random.choice([32, 64, 128]),
+            'data_quality_score': np.random.beta(a=8.8, b=1.2) * 100 if status == 'completed' else None,
+            'batch_id': f"batch_{start_time.strftime('%Y%m%d_%H')}"
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_staging_data(n_records=6000):
+    """Generate Airbnb staging (cleansed) reservation data"""
+    np.random.seed(46)
+    
+    data = []
+    property_types = ['Apartment', 'House', 'Villa', 'Condo', 'Townhouse', 'Loft']
+    cities = ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain']
+    statuses = ['confirmed', 'cancelled', 'pending', 'completed']
+    
+    for i in range(n_records):
+        checkin_date = datetime.now() + timedelta(days=np.random.randint(-30, 90))  # Past bookings to future
+        nights = np.random.poisson(lam=3) + 1  # 1-10 nights typical
+        checkout_date = checkin_date + timedelta(days=nights)
+        
+        # Price per night varies by city and property type
+        base_price = np.random.lognormal(mean=5, sigma=0.8)  # AED 100-1000 per night
+        total_price = base_price * nights
+        
+        data.append({
+            'booking_id': f"airbnb_booking_{i:08d}",
+            'host_id': f"host_{np.random.randint(1000, 9999)}",
+            'guest_id': f"guest_{np.random.randint(10000, 99999)}",
+            'property_id': f"property_{np.random.randint(100000, 999999)}",
+            'checkin_date': checkin_date.strftime('%Y-%m-%d'),
+            'checkout_date': checkout_date.strftime('%Y-%m-%d'),
+            'nights': nights,
+            'price_aed': round(total_price, 2),
+            'status': np.random.choice(statuses, p=[0.7, 0.15, 0.1, 0.05]),
+            'property_type': np.random.choice(property_types),
+            'city': np.random.choice(cities, p=[0.4, 0.25, 0.15, 0.08, 0.06, 0.04, 0.02]),
+            'etl_batch_id': f"etl_batch_{checkin_date.strftime('%Y%m%d_%H')}",
+            'processed_ts': (datetime.now() - timedelta(minutes=np.random.randint(5, 60))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_etl_manifests(n_manifests=10):
+    """Generate Airbnb ETL manifest data"""
+    np.random.seed(46)
+    
+    data = []
+    datasets = ['raw_bookings', 'staging_reservations', 'host_analytics', 'pricing_models', 'search_rankings']
+    
+    for i in range(n_manifests):
+        created_time = datetime.now() - timedelta(days=np.random.randint(0, 30))
+        
+        data.append({
+            'manifest_id': f"airbnb_manifest_{i:04d}",
+            'dataset_name': np.random.choice(datasets),
+            'schema_version': f"v{np.random.randint(1, 4)}.{np.random.randint(0, 8)}",
+            'row_count': int(np.random.lognormal(mean=11.5, sigma=1.8)),
+            'size_bytes': int(np.random.lognormal(mean=21, sigma=2.3)),
+            'created_by': np.random.choice(['booking_etl', 'analytics_pipeline', 'ml_platform']),
+            'created_ts': created_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source_dataset': 'raw_airbnb_events',
+            'transformation_logic': 'Validate dates, calculate pricing, enrich with property metadata',
+            'data_quality_checks': json.dumps({"date_validation": "passed", "price_bounds": "passed", "property_lookup": "passed"}),
+            'partition_info': json.dumps({"partition_cols": ["date", "city"], "partition_count": np.random.randint(15, 80)})
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_etl_jobs(n_jobs=500):
+    """Generate NYSE ETL job execution data"""
+    np.random.seed(47)
+    
+    data = []
+    job_names = [
+        'trades-raw-to-staging', 'market-data-stream', 'price-calculation-batch',
+        'volume-analytics-etl', 'regulatory-reporting', 'risk-metrics-batch',
+        'order-book-reconstruction', 'settlement-processing', 'audit-trail-etl',
+        'market-surveillance', 'volatility-calculation', 'index-rebalancing'
+    ]
+    
+    for i in range(n_jobs):
+        start_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        # NYSE jobs are typically faster due to high-performance requirements
+        duration_ms = int(np.random.lognormal(mean=6, sigma=1.8) * 1000)  # Sub-second to minutes
+        end_time = start_time + timedelta(milliseconds=duration_ms)
+        
+        records_in = int(np.random.lognormal(mean=13, sigma=2.5))  # High volume
+        efficiency = np.random.beta(a=9.5, b=0.5)  # Very efficient systems
+        records_out = int(records_in * efficiency)
+        
+        status = np.random.choice(['completed', 'failed', 'running', 'cancelled'], p=[0.95, 0.03, 0.015, 0.005])
+        
+        data.append({
+            'job_id': f"nyse_job_{i:06d}_{start_time.strftime('%Y%m%d_%H%M%S')}",
+            'company': 'NYSE',
+            'job_name': np.random.choice(job_names),
+            'job_type': np.random.choice(['batch', 'stream', 'micro-batch'], p=[0.3, 0.5, 0.2]),
+            'engine': np.random.choice(['spark', 'flink', 'custom', 'kafka-streams'], p=[0.25, 0.4, 0.25, 0.1]),
+            'input_path': f"hdfs://nyse-cluster/raw/trades/{start_time.strftime('%Y/%m/%d')}",
+            'output_path': f"hdfs://nyse-cluster/staging/trades/{start_time.strftime('%Y/%m/%d')}",
+            'records_in': records_in,
+            'records_out': records_out if status == 'completed' else 0,
+            'start_ts': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_ts': end_time.strftime('%Y-%m-%d %H:%M:%S') if status in ['completed', 'failed'] else None,
+            'duration_ms': duration_ms if status in ['completed', 'failed'] else None,
+            'status': status,
+            'error_msg': 'NetworkException: Connection timeout to market data feed' if status == 'failed' else None,
+            'resource_cpu_cores': np.random.choice([32, 64, 128]),
+            'resource_memory_gb': np.random.choice([128, 256, 512]),
+            'data_quality_score': np.random.beta(a=9.8, b=0.2) * 100 if status == 'completed' else None,
+            'batch_id': f"batch_{start_time.strftime('%Y%m%d_%H')}"
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_staging_data(n_records=50000):
+    """Generate NYSE staging (cleansed) trade data"""
+    np.random.seed(47)
+    
+    data = []
+    tickers = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'JPM', 'JNJ', 'UNH', 'V', 'PG']
+    venues = ['NYSE', 'NASDAQ', 'BATS', 'IEX', 'ARCA']
+    trade_types = ['regular_way', 'cross_trade', 'block_trade', 'odd_lot']
+    
+    for i in range(n_records):
+        trade_time = datetime.now() - timedelta(hours=np.random.randint(0, 168))
+        
+        # Realistic stock prices
+        ticker = np.random.choice(tickers)
+        base_prices = {'AAPL': 180, 'GOOGL': 140, 'MSFT': 350, 'AMZN': 150, 'TSLA': 200, 
+                      'META': 300, 'NVDA': 450, 'JPM': 150, 'JNJ': 170, 'UNH': 520, 'V': 240, 'PG': 150}
+        price = base_prices.get(ticker, 100) * np.random.uniform(0.95, 1.05)  # ±5% variance
+        
+        size = int(np.random.lognormal(mean=5, sigma=2))  # 100 to 100,000 shares typical
+        
+        data.append({
+            'tick_id': f"nyse_tick_{i:08d}",
+            'ticker': ticker,
+            'timestamp_ms': trade_time.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],  # Include milliseconds
+            'price': round(price, 2),
+            'size': size,
+            'venue': np.random.choice(venues),
+            'is_auction': 1 if np.random.random() < 0.05 else 0,  # 5% auction trades
+            'trade_type': np.random.choice(trade_types, p=[0.85, 0.08, 0.05, 0.02]),
+            'etl_batch_id': f"etl_batch_{trade_time.strftime('%Y%m%d_%H%M')}",  # More granular batches
+            'processed_ts': (trade_time + timedelta(milliseconds=np.random.randint(100, 1000))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_etl_manifests(n_manifests=25):
+    """Generate NYSE ETL manifest data"""
+    np.random.seed(47)
+    
+    data = []
+    datasets = ['raw_trades', 'staging_trades', 'market_data', 'price_feeds', 'order_books', 'regulatory_data']
+    
+    for i in range(n_manifests):
+        created_time = datetime.now() - timedelta(days=np.random.randint(0, 30))
+        
+        data.append({
+            'manifest_id': f"nyse_manifest_{i:04d}",
+            'dataset_name': np.random.choice(datasets),
+            'schema_version': f"v{np.random.randint(3, 10)}.{np.random.randint(0, 20)}",
+            'row_count': int(np.random.lognormal(mean=15, sigma=2.8)),
+            'size_bytes': int(np.random.lognormal(mean=26, sigma=3)),
+            'created_by': np.random.choice(['market_data_etl', 'trading_pipeline', 'compliance_system']),
+            'created_ts': created_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'source_dataset': 'raw_nyse_ticks',
+            'transformation_logic': 'Validate trade prices, reconstruct order book, calculate OHLC',
+            'data_quality_checks': json.dumps({"price_validation": "passed", "volume_check": "passed", "timestamp_continuity": "passed"}),
+            'partition_info': json.dumps({"partition_cols": ["date", "ticker", "venue"], "partition_count": np.random.randint(100, 500)})
+        })
+    
+    return pd.DataFrame(data)
+
+# ============================================================================
 # MODULE 1: INGESTION - CHART HELPER FUNCTIONS
 # ============================================================================
 
@@ -4851,750 +5663,1127 @@ def create_processing_status_charts(data, company_name):
         st.plotly_chart(fig, use_container_width=True)
 
 def show_etl_pipelines():
-    st.header("🔄 ETL/ELT Pipelines")
-    st.markdown("Learn about Extract, Transform, Load processes and orchestration")
+    st.header("🔄 Module 3: ETL/ELT Pipelines & Staging Data")
+    st.markdown("""
+    **Explore ETL pipeline execution, staging data transformation, and data processing workflows.**
+    This module demonstrates how raw data is cleaned, transformed, and prepared for analytics.
+    """)
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 ETL vs ELT", "🛠️ Pipeline Builder", "📊 ETL Analytics", "🔄 ETL Flow Charts", "🏢 Real Examples"])
+    # Initialize Module 3 database
+    module3_conn = init_module3_database()
+    
+    # Sidebar for company selection
+    st.sidebar.markdown("### 🏢 Select Company for ETL Analysis")
+    company_name = st.sidebar.selectbox(
+        "Choose Company:",
+        ["Uber", "Netflix", "Amazon", "Airbnb", "NYSE"],
+        key="etl_company_selector"
+    )
+    
+    # Populate data for selected company
+    populate_module3_data(module3_conn, company_name)
+    
+    # Create main tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 ETL Analytics", 
+        "🔍 Pipeline Explorer", 
+        "📋 Staging Data", 
+        "⚙️ Technical Stack", 
+        "📚 ETL Schema"
+    ])
     
     with tab1:
-        st.subheader("ETL vs ELT: What's the difference?")
+        st.subheader(f"📊 {company_name} ETL Pipeline Analytics")
         
-        col1, col2 = st.columns(2)
+        # ETL Performance Overview
+        jobs_query = f"""
+        SELECT 
+            COUNT(*) as total_jobs,
+            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_jobs,
+            COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_jobs,
+            COUNT(CASE WHEN status = 'running' THEN 1 END) as running_jobs,
+            AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END)/1000.0 as avg_duration_sec,
+            SUM(records_in) as total_records_in,
+            SUM(records_out) as total_records_out
+        FROM processing_jobs 
+        WHERE company = '{company_name}'
+        """
         
-        with col1:
-            st.markdown("""
-            ### 🔄 ETL (Extract, Transform, Load)
-            **Traditional approach**
-            
-            **Process Flow:**
-            1. **Extract** data from sources
-            2. **Transform** data in staging area
-            3. **Load** transformed data to destination
-            
-            **Characteristics:**
-            - Transform before loading
-            - Requires staging area
-            - Better for structured data
-            - More processing upfront
-            
-            **Tools:** Talend, Informatica, SSIS, Pentaho
-            """)
-            
-            # ETL Flow visualization
-            etl_flow = pd.DataFrame({
-                'Step': ['Source', 'Staging', 'Transform', 'Destination'],
-                'Data_Volume': [100, 100, 80, 80],
-                'Processing': [0, 20, 80, 0]
-            })
-            fig_etl = px.bar(etl_flow, x='Step', y='Data_Volume', 
-                           title='ETL Flow (Transform before Load)')
-            st.plotly_chart(fig_etl, use_container_width=True)
-            
-        with col2:
-            st.markdown("""
-            ### 🔄 ELT (Extract, Load, Transform)
-            **Modern cloud approach**
-            
-            **Process Flow:**
-            1. **Extract** data from sources
-            2. **Load** raw data to destination
-            3. **Transform** data in destination system
-            
-            **Characteristics:**
-            - Load raw data first
-            - Transform in powerful cloud systems
-            - Better for big data & unstructured
-            - Leverages cloud compute power
-            
-            **Tools:** Fivetran, Stitch, dbt, AWS Glue
-            """)
-            
-            # ELT Flow visualization  
-            elt_flow = pd.DataFrame({
-                'Step': ['Source', 'Raw Load', 'Destination', 'Transform'],
-                'Data_Volume': [100, 100, 100, 85],
-                'Processing': [0, 10, 20, 70]
-            })
-            fig_elt = px.bar(elt_flow, x='Step', y='Data_Volume',
-                           title='ELT Flow (Transform after Load)')
-            st.plotly_chart(fig_elt, use_container_width=True)
+        overview_data = query_module3_data(module3_conn, jobs_query)
         
-        # When to use which
-        st.markdown("---")
-        st.subheader("🎯 When to use ETL vs ELT?")
+        if not overview_data.empty:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Total ETL Jobs", 
+                    int(overview_data.iloc[0]['total_jobs']),
+                    delta=None
+                )
+                
+            with col2:
+                success_rate = (overview_data.iloc[0]['completed_jobs'] / overview_data.iloc[0]['total_jobs']) * 100
+                st.metric(
+                    "Success Rate", 
+                    f"{success_rate:.1f}%",
+                    delta=f"{success_rate - 85:.1f}%" if success_rate >= 85 else f"{success_rate - 85:.1f}%"
+                )
+                
+            with col3:
+                st.metric(
+                    "Avg Duration", 
+                    f"{overview_data.iloc[0]['avg_duration_sec']:.1f}s",
+                    delta=None
+                )
+                
+            with col4:
+                efficiency = (overview_data.iloc[0]['total_records_out'] / overview_data.iloc[0]['total_records_in']) * 100
+                st.metric(
+                    "Data Efficiency", 
+                    f"{efficiency:.1f}%",
+                    delta=f"{efficiency - 90:.1f}%" if efficiency >= 90 else f"{efficiency - 90:.1f}%"
+                )
         
-        choice_factors = st.selectbox("Choose a factor:", 
-            ["Data Volume", "Data Type", "Compute Resources", "Cost"])
-        
-        if choice_factors == "Data Volume":
-            st.markdown("""
-            - **Small to Medium Data (< 1TB):** ETL works fine
-            - **Big Data (> 1TB):** ELT leverages cloud scale better
-            - **Real-time streams:** ELT for immediate loading, transform later
-            """)
-        elif choice_factors == "Data Type":
-            st.markdown("""
-            - **Structured Data (SQL tables):** ETL traditional strength
-            - **Semi-structured (JSON, XML):** ELT handles variety better  
-            - **Unstructured (logs, images):** ELT stores raw, transform as needed
-            """)
-        elif choice_factors == "Compute Resources":
-            st.markdown("""
-            - **Limited processing power:** ETL with dedicated transform servers
-            - **Cloud-native:** ELT leverages scalable cloud compute
-            - **On-premise:** ETL might be more cost-effective
-            """)
+        # ETL Charts
+        create_etl_overview_dashboard(module3_conn, company_name)
+        create_etl_performance_charts(module3_conn, company_name)
     
     with tab2:
-        st.subheader("🛠️ Interactive Pipeline Builder")
+        st.subheader(f"🔍 {company_name} ETL Pipeline Explorer")
+        st.markdown("**Interactive exploration of ETL job executions and data lineage**")
         
-        # Pipeline configuration
-        st.markdown("### Build Your Pipeline")
+        # Interactive SQL Query Interface
+        st.markdown("### 💻 Interactive SQL Explorer")
+        
+        # Query templates
+        query_templates = {
+            "Recent ETL Jobs": f"""
+SELECT job_id, job_name, job_type, engine, status, duration_ms/1000.0 as duration_sec, 
+       records_in, records_out, start_ts
+FROM processing_jobs 
+WHERE company = '{company_name}' 
+ORDER BY start_ts DESC 
+LIMIT 10
+            """,
+            "Failed ETL Jobs": f"""
+SELECT job_id, job_name, error_msg, duration_ms/1000.0 as duration_sec, start_ts
+FROM processing_jobs 
+WHERE company = '{company_name}' AND status = 'failed'
+ORDER BY start_ts DESC
+            """,
+            "ETL Performance by Engine": f"""
+SELECT engine, 
+       COUNT(*) as job_count,
+       AVG(duration_ms)/1000.0 as avg_duration_sec,
+       AVG(data_quality_score) as avg_quality_score
+FROM processing_jobs 
+WHERE company = '{company_name}' AND status = 'completed'
+GROUP BY engine
+ORDER BY avg_duration_sec
+            """,
+            "Data Lineage Manifests": f"""
+SELECT manifest_id, dataset_name, schema_version, row_count, 
+       size_bytes/1024/1024 as size_mb, created_by, created_ts
+FROM etl_manifests 
+WHERE dataset_name LIKE '%{company_name.lower()}%'
+ORDER BY created_ts DESC
+LIMIT 10
+            """
+        }
+        
+        selected_template = st.selectbox("Choose Query Template:", list(query_templates.keys()))
+        
+        # Custom query editor
+        custom_query = st.text_area(
+            "SQL Query:", 
+            value=query_templates[selected_template],
+            height=150,
+            help="Write custom SQL to explore ETL pipeline data"
+        )
+        
+        if st.button("Execute Query", type="primary"):
+            try:
+                result = query_module3_data(module3_conn, custom_query)
+                
+                if not result.empty:
+                    st.markdown("### 📊 Query Results")
+                    st.dataframe(result, use_container_width=True)
+                    
+                    # Download option
+                    csv_data = result.to_csv(index=False)
+                    st.download_button(
+                        "Download Results as CSV",
+                        csv_data,
+                        file_name=f"{company_name}_etl_query_results.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.info("Query returned no results")
+                    
+            except Exception as e:
+                st.error(f"Query error: {str(e)}")
+        
+        # ETL Job Status Distribution
+        st.markdown("### 📈 ETL Job Status Distribution")
+        
+        status_query = f"""
+        SELECT status, COUNT(*) as count
+        FROM processing_jobs 
+        WHERE company = '{company_name}'
+        GROUP BY status
+        """
+        
+        status_data = query_module3_data(module3_conn, status_query)
+        if not status_data.empty:
+            fig = px.pie(status_data, values='count', names='status', 
+                        title=f"{company_name} ETL Job Status Distribution")
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with tab3:
+        st.subheader(f"📋 {company_name} Staging Data Browser")
+        st.markdown("**Browse cleaned and transformed staging data ready for analytics**")
+        
+        # Staging data browser
+        staging_table_map = {
+            'Uber': 'staging_uber_rides',
+            'Netflix': 'staging_netflix_events',
+            'Amazon': 'staging_amazon_orders',
+            'Airbnb': 'staging_airbnb_reservations',
+            'NYSE': 'staging_nyse_trades'
+        }
+        
+        table_name = staging_table_map[company_name]
+        
+        # Data filters
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            n_rows = st.slider("Number of rows to display:", 10, 1000, 100)
+            
+        with col2:
+            # Get unique ETL batch IDs for filtering
+            batch_query = f"SELECT DISTINCT etl_batch_id FROM {table_name} ORDER BY etl_batch_id DESC LIMIT 20"
+            batch_data = query_module3_data(module3_conn, batch_query)
+            batch_ids = batch_data['etl_batch_id'].tolist() if not batch_data.empty else []
+            
+            batch_filter = st.multiselect("Filter by ETL Batch:", batch_ids)
+            
+        with col3:
+            # Date range filter
+            date_filter = st.date_input("Filter by Date Range:", value=[], key="staging_date_filter")
+        
+        # Build filtered query
+        base_query = f"SELECT * FROM {table_name}"
+        conditions = []
+        
+        if batch_filter:
+            batch_list = "', '".join(batch_filter)
+            conditions.append(f"etl_batch_id IN ('{batch_list}')")
+        
+        if date_filter and len(date_filter) == 2:
+            start_date, end_date = date_filter
+            conditions.append(f"DATE(processed_ts) BETWEEN '{start_date}' AND '{end_date}'")
+        
+        if conditions:
+            staging_query = f"{base_query} WHERE {' AND '.join(conditions)} LIMIT {n_rows}"
+        else:
+            staging_query = f"{base_query} ORDER BY processed_ts DESC LIMIT {n_rows}"
+        
+        staging_data = query_module3_data(module3_conn, staging_query)
+        
+        if not staging_data.empty:
+            st.markdown("### 📊 Staging Data Sample")
+            st.dataframe(staging_data, use_container_width=True)
+            
+            # Data quality metrics
+            st.markdown("### 🔍 Data Quality Metrics")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                total_records = len(staging_data)
+                st.metric("Total Records", f"{total_records:,}")
+                
+            with col2:
+                # Check for null values in key columns
+                null_count = staging_data.isnull().sum().sum()
+                st.metric("Null Values", null_count)
+                
+            with col3:
+                # Unique ETL batches
+                unique_batches = staging_data['etl_batch_id'].nunique()
+                st.metric("ETL Batches", unique_batches)
+        else:
+            st.info("No staging data found matching the filters")
+    
+    with tab4:
+        st.subheader(f"⚙️ {company_name} ETL Technical Stack")
+        st.markdown("**Technical architecture and tools used for ETL/ELT processing**")
+        
+        if company_name == "Uber":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                ### 🚗 Uber ETL/ELT Architecture
+                
+                **Data Processing Pipeline:**
+                - **Raw Data Sources:** Kafka streams from mobile apps, GPS devices, payment systems
+                - **Ingestion Layer:** Apache Kafka with high-throughput partitioned topics
+                - **Stream Processing:** Apache Flink for real-time fare calculation and surge pricing
+                - **Batch Processing:** Apache Spark on Kubernetes for historical analysis
+                - **Orchestration:** Apache Airflow with 2000+ DAGs for workflow management
+                
+                **Storage Architecture:**
+                - **Data Lake:** Hadoop HDFS + S3 for raw event storage
+                - **Staging:** Hive tables partitioned by date and city
+                - **Data Warehouse:** Vertica for analytics and reporting
+                - **Caching:** Redis for session management and real-time lookups
+                """)
+                
+            with col2:
+                st.markdown("""
+                **Core ETL Technologies:**
+                - **Apache Spark:** Large-scale data processing with Scala/Python
+                - **Apache Flink:** Stream processing for sub-second latency requirements
+                - **Kafka Connect:** Sink/source connectors for data movement
+                - **Presto:** Distributed SQL query engine for ad-hoc analysis
+                - **DBT:** SQL-based transformations and data modeling
+                
+                **Data Quality & Monitoring:**
+                - **Great Expectations:** Data validation and profiling framework
+                - **DataDog:** Pipeline monitoring and alerting
+                - **Apache Atlas:** Data governance and lineage tracking
+                - **Grafana:** ETL pipeline performance dashboards
+                - **PagerDuty:** Critical data pipeline failure alerts
+                
+                **Infrastructure:**
+                - **Kubernetes:** Container orchestration for Spark jobs
+                - **Prometheus:** Metrics collection and monitoring
+                - **Jenkins:** CI/CD for data pipeline deployments
+                """)
+                
+            st.markdown("---")
+            st.markdown("### 🔄 Uber ETL Workflow Example")
+            st.code("""
+# Uber Ride ETL Pipeline (Simplified)
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+
+spark = SparkSession.builder.appName("UberETL").getOrCreate()
+
+# 1. Extract raw ride events from Kafka
+raw_rides = spark.readStream \\
+  .format("kafka") \\
+  .option("kafka.bootstrap.servers", "kafka-cluster:9092") \\
+  .option("subscribe", "ride-events") \\
+  .load()
+
+# 2. Transform: Parse JSON and calculate metrics
+rides_transformed = raw_rides \\
+  .select(from_json(col("value").cast("string"), ride_schema).alias("data")) \\
+  .select("data.*") \\
+  .withColumn("fare_per_km", col("total_fare") / col("distance_km")) \\
+  .withColumn("trip_duration_min", 
+              (unix_timestamp("dropoff_time") - unix_timestamp("pickup_time")) / 60) \\
+  .filter(col("trip_duration_min") > 0)
+
+# 3. Load to staging table (Delta Lake format)
+rides_transformed.writeStream \\
+  .format("delta") \\
+  .option("checkpointLocation", "/tmp/uber-rides-checkpoint") \\
+  .outputMode("append") \\
+  .table("staging.uber_rides")
+            """, language='python')
+            
+        elif company_name == "Netflix":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                ### 🎬 Netflix ETL/ELT Architecture
+                
+                **Streaming Data Pipeline:**
+                - **Event Collection:** Custom instrumentation across 200+ million devices
+                - **Stream Processing:** Apache Kafka with 1.3 trillion events/day
+                - **Real-time ETL:** Apache Flink for immediate content recommendation updates
+                - **Batch Processing:** Apache Spark with EMR for large-scale analytics
+                - **ML Pipelines:** Metaflow for recommendation model training
+                
+                **Data Platform:**
+                - **Data Lake:** S3 with 100+ petabytes of data
+                - **Formats:** Parquet, Avro, Delta Lake for different use cases
+                - **Catalog:** Apache Iceberg for table metadata management
+                - **Serving:** Cassandra for real-time recommendation serving
+                """)
+                
+            with col2:
+                st.markdown("""
+                **Technology Stack:**
+                - **Apache Spark:** Scala-based processing with custom optimizations
+                - **Flink SQL:** Stream processing with SQL for analyst productivity
+                - **Genie:** Job execution service for Spark/Hive/Presto jobs
+                - **Metacat:** Data discovery and metadata management
+                - **Jupyter:** Notebooks for data exploration and prototyping
+                
+                **Advanced Features:**
+                - **Auto-scaling:** Dynamic resource allocation based on data volume
+                - **Lineage Tracking:** End-to-end data flow visualization
+                - **A/B Testing:** Integrated experimentation framework
+                - **Cost Optimization:** Spot instances and preemptible VMs
+                - **Multi-region:** Global data replication and processing
+                """)
+                
+            st.markdown("---")
+            st.code("""
+# Netflix Content Analytics ETL (Simplified)
+import pyspark.sql.functions as F
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("NetflixContentETL").getOrCreate()
+
+# Extract viewing events
+viewing_events = spark.table("raw.viewing_events") \\
+  .filter(F.col("event_date") >= "2024-01-01")
+
+# Transform: Content engagement metrics
+content_metrics = viewing_events \\
+  .groupBy("content_id", "country", "device_type") \\
+  .agg(
+    F.count("user_id").alias("total_viewers"),
+    F.countDistinct("user_id").alias("unique_viewers"),
+    F.avg("watch_duration_sec").alias("avg_watch_duration"),
+    F.percentile_approx("watch_duration_sec", 0.5).alias("median_watch_duration"),
+    F.sum(F.when(F.col("completed_viewing") == True, 1).otherwise(0)).alias("completion_count")
+  ) \\
+  .withColumn("completion_rate", F.col("completion_count") / F.col("total_viewers")) \\
+  .withColumn("engagement_score", 
+              F.col("avg_watch_duration") * F.col("completion_rate") * F.col("unique_viewers") / 1000)
+
+# Load to analytics table
+content_metrics.write \\
+  .mode("overwrite") \\
+  .partitionBy("country") \\
+  .saveAsTable("analytics.content_engagement_daily")
+            """, language='python')
+            
+        elif company_name == "Amazon":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                ### 📦 Amazon ETL/ELT Architecture
+                
+                **E-commerce Data Pipeline:**
+                - **Event Sources:** Order management, inventory, customer behavior, logistics
+                - **Real-time Ingestion:** Amazon Kinesis Data Streams (millions of events/sec)
+                - **Stream Processing:** Kinesis Analytics and Lambda for immediate processing
+                - **Batch Processing:** EMR with Spark for large-scale analytics
+                - **Orchestration:** AWS Step Functions + Airflow hybrid approach
+                
+                **AWS-Native Stack:**
+                - **Data Lake:** S3 with lifecycle policies and intelligent tiering
+                - **ETL Service:** AWS Glue for serverless data preparation
+                - **Data Warehouse:** Redshift with automatic workload management
+                - **Search & Analytics:** OpenSearch for product search optimization
+                """)
+                
+            with col2:
+                st.markdown("""
+                **Amazon's ETL Technologies:**
+                - **AWS Glue:** PySpark-based ETL with automatic schema discovery
+                - **Lambda:** Serverless functions for lightweight transformations
+                - **EMR:** Managed Hadoop/Spark clusters for heavy processing
+                - **DMS:** Database Migration Service for data replication
+                - **QuickSight:** BI tool with direct ETL capabilities
+                
+                **Operational Excellence:**
+                - **CloudWatch:** Comprehensive monitoring and alerting
+                - **X-Ray:** Distributed tracing for ETL pipelines
+                - **CloudFormation:** Infrastructure as code for reproducible deployments
+                - **CodePipeline:** CI/CD for data pipeline code
+                - **Cost Explorer:** ETL cost optimization and resource management
+                """)
+                
+            st.markdown("---")
+            st.code("""
+# Amazon Order Processing ETL (AWS Glue)
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+
+# Initialize Glue context
+glueContext = GlueContext(SparkContext.getOrCreate())
+spark = glueContext.spark_session
+
+# Extract: Read from multiple sources
+orders_raw = glueContext.create_dynamic_frame.from_catalog(
+    database="raw_data", 
+    table_name="orders_stream"
+)
+
+customers = glueContext.create_dynamic_frame.from_catalog(
+    database="reference_data", 
+    table_name="customer_profiles"
+)
+
+# Transform: Join and enrich order data
+orders_df = orders_raw.toDF()
+customers_df = customers.toDF()
+
+enriched_orders = orders_df.join(customers_df, "customer_id", "left") \\
+  .select(
+    "order_id", "customer_id", "order_timestamp", "items_json",
+    "customer_segment", "customer_lifetime_value",
+    "total_amount", "fulfillment_center"
+  ) \\
+  .withColumn("order_hour", hour("order_timestamp")) \\
+  .withColumn("is_prime_customer", when(col("customer_segment") == "Prime", True).otherwise(False))
+
+# Load: Write to staging with partitioning
+enriched_orders.write \\
+  .mode("append") \\
+  .partitionBy("fulfillment_center", "order_date") \\
+  .parquet("s3://amazon-data-lake/staging/enriched_orders/")
+            """, language='python')
+            
+        elif company_name == "Airbnb":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                ### 🏠 Airbnb ETL/ELT Architecture
+                
+                **Marketplace Data Pipeline:**
+                - **Data Sources:** Booking platform, search logs, host interactions, pricing data
+                - **Message Queuing:** Apache Kafka for event streaming
+                - **Stream Processing:** Kafka Streams + Flink for real-time pricing
+                - **Batch Processing:** Apache Spark on Kubernetes (Airbnb's "Dataportal")
+                - **Workflow Management:** Airflow with 1000+ DAGs
+                
+                **Data Infrastructure:**
+                - **Data Lake:** S3 + HDFS hybrid for different access patterns
+                - **Processing:** Custom Spark framework ("SparkSQL Gateway")
+                - **Serving:** Druid for OLAP queries and real-time analytics
+                - **Feature Store:** Custom ML feature serving platform
+                """)
+                
+            with col2:
+                st.markdown("""
+                **Airbnb's Custom Stack:**
+                - **Minerva:** Custom SQL query service built on Presto
+                - **Superset:** Open-source BI tool (originally developed by Airbnb)
+                - **Chronon:** Feature platform for consistent ML features
+                - **DataPortal:** Self-service data platform for analysts
+                - **Airflow:** Workflow orchestration (originally developed by Airbnb)
+                
+                **Data Quality Framework:**
+                - **Deequ:** Data quality validation using Spark
+                - **Great Expectations:** Automated data profiling and testing
+                - **Monte Carlo:** Data reliability monitoring
+                - **Custom Alerts:** Slack/PagerDuty integration for data incidents
+                - **Lineage:** Custom data lineage tracking system
+                """)
+                
+            st.markdown("---")
+            st.code("""
+# Airbnb Booking Analytics ETL
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("AirbnbBookingETL").getOrCreate()
+
+# Extract booking events and property data
+bookings = spark.table("raw.booking_events") \\
+  .filter(col("event_date") >= current_date() - 30)
+
+properties = spark.table("dim.properties")
+
+# Transform: Calculate booking metrics with advanced analytics
+booking_window = Window.partitionBy("property_id").orderBy("booking_date")
+
+booking_analytics = bookings \\
+  .join(properties, "property_id") \\
+  .withColumn("days_to_checkin", datediff("checkin_date", "booking_date")) \\
+  .withColumn("booking_lead_time_category", 
+              when(col("days_to_checkin") < 7, "last_minute")
+              .when(col("days_to_checkin") < 30, "short_term")
+              .otherwise("long_term")) \\
+  .withColumn("seasonal_demand", 
+              when(month("checkin_date").isin([6,7,8]), "peak")
+              .when(month("checkin_date").isin([12,1,2]), "low")
+              .otherwise("moderate")) \\
+  .withColumn("property_performance_rank", 
+              row_number().over(
+                Window.partitionBy("city", "property_type")
+                .orderBy(desc("booking_frequency"))
+              ))
+
+# Load with optimized partitioning strategy
+booking_analytics.write \\
+  .mode("overwrite") \\
+  .partitionBy("city", "seasonal_demand") \\
+  .option("maxRecordsPerFile", 100000) \\
+  .saveAsTable("analytics.booking_insights")
+            """, language='python')
+            
+        elif company_name == "NYSE":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                ### 💰 NYSE ETL/ELT Architecture
+                
+                **High-Frequency Trading Data:**
+                - **Ultra-Low Latency:** Custom hardware with FPGA acceleration
+                - **Data Capture:** Market data feeds at microsecond precision
+                - **Stream Processing:** Custom C++ engines for sub-millisecond processing
+                - **Message Queuing:** Chronicle Queue for persistence with nanosecond precision
+                - **Batch Processing:** Distributed processing for end-of-day settlements
+                
+                **Financial Data Requirements:**
+                - **Compliance:** SEC/FINRA regulatory reporting requirements
+                - **Audit Trail:** Complete transaction lineage for regulatory reviews
+                - **Real-time Risk:** Continuous risk calculation and monitoring
+                - **Market Data:** Tick-by-tick data processing and distribution
+                """)
+                
+            with col2:
+                st.markdown("""
+                **Specialized Technologies:**
+                - **KDB+/Q:** Time-series database for historical market data
+                - **Chronicle Map:** Low-latency in-memory data structures
+                - **Aeron:** High-performance messaging for market data
+                - **Apache Spark:** Large-scale batch processing for analytics
+                - **InfluxDB:** Time-series metrics and monitoring data
+                
+                **Regulatory & Compliance:**
+                - **OATS/CAT:** Order audit trail system integration
+                - **Blue Prism:** RPA for regulatory report automation
+                - **Palantir:** Risk and surveillance data analysis
+                - **Custom Surveillance:** Proprietary market manipulation detection
+                - **Blockchain:** Trade settlement and clearing integration
+                """)
+                
+            st.markdown("---")
+            st.code("""
+// NYSE Market Data Processing (Q/KDB+ style)
+/ Load tick data from market data feed
+ticks:("STFIS";enlist",")0:`:marketdata/trades_20241201.csv
+
+/ Transform: Calculate OHLC and volume-weighted average price (VWAP)
+ohlc_1min:select 
+  open:first price, 
+  high:max price, 
+  low:min price, 
+  close:last price,
+  volume:sum size,
+  vwap:size wavg price,
+  trade_count:count i 
+by sym, minute:01:00 xbar time from ticks
+
+/ Advanced analytics: Calculate price momentum and volatility
+momentum:select 
+  sym, minute,
+  price_change:close - prev close,
+  price_change_pct:(close - prev close) % prev close,
+  volatility:dev price_change_pct,
+  rsi:rsi[14;close]  / 14-period RSI
+by sym from ohlc_1min
+
+/ Store in partitioned table optimized for time-series queries
+`:nyse_analytics/ohlc_1min/ set .Q.en[`:nyse_analytics/] ohlc_1min
+`:nyse_analytics/momentum/ set .Q.en[`:nyse_analytics/] momentum
+            """, language='q')
+        
+        st.markdown("---")
+        st.markdown("### 🔧 Common ETL/ELT Patterns Across Companies")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown("#### 📥 Extract")
-            source_type = st.selectbox("Data Source:", 
-                ["Database", "API", "Files", "Streaming"])
-            if source_type == "Database":
-                db_type = st.selectbox("Database Type:", ["MySQL", "PostgreSQL", "MongoDB"])
-            elif source_type == "API":
-                api_type = st.selectbox("API Type:", ["REST", "GraphQL", "SOAP"])
-            elif source_type == "Files":
-                file_type = st.selectbox("File Type:", ["CSV", "JSON", "Parquet", "XML"])
-        
-        with col2:
-            st.markdown("#### 🔄 Transform")
-            pipeline_type = st.radio("Pipeline Type:", ["ETL", "ELT"])
+            st.markdown("""
+            **Stream Processing:**
+            - Apache Kafka for message queuing
+            - Apache Flink for low-latency processing  
+            - Kafka Streams for lightweight stream apps
+            - Custom real-time engines for critical paths
+            """)
             
-            transforms = st.multiselect("Select Transformations:", 
-                ["Data Cleaning", "Type Conversion", "Aggregation", 
-                 "Joining", "Filtering", "Enrichment"])
+        with col2:
+            st.markdown("""
+            **Batch Processing:**
+            - Apache Spark as the dominant framework
+            - Kubernetes for container orchestration
+            - Apache Airflow for workflow management
+            - Cloud-native services (EMR, Dataflow, etc.)
+            """)
             
         with col3:
-            st.markdown("#### 📤 Load")
-            destination = st.selectbox("Destination:", 
-                ["Data Warehouse", "Data Lake", "Database", "API"])
-            
-            load_mode = st.selectbox("Load Mode:", 
-                ["Full Load", "Incremental", "Upsert", "Append"])
+            st.markdown("""
+            **Data Quality & Governance:**
+            - Great Expectations for data validation
+            - Apache Atlas/Custom tools for lineage
+            - dbt for SQL-based transformations
+            - Monitoring: DataDog, New Relic, Custom
+            """)
         
-        if st.button("Generate Pipeline Code"):
-            st.markdown("### 🐍 Generated Python Pipeline")
-            
-            pipeline_code = f"""
-import pandas as pd
-from datetime import datetime
-
-def {pipeline_type.lower()}_pipeline():
-    # Extract from {source_type}
-    print(f"Extracting data from {source_type}...")
-    
-    # Sample extraction code
-    if "{source_type}" == "Database":
-        data = pd.read_sql("SELECT * FROM source_table", connection)
-    elif "{source_type}" == "API":
-        data = pd.read_json("https://api.example.com/data")
-    elif "{source_type}" == "Files":
-        data = pd.read_csv("source_file.csv")
-    
-    print(f"Extracted {{len(data)}} records")
-    
-    {"# Transform data (ETL approach)" if pipeline_type == "ETL" else "# Load raw data first (ELT approach)"}
-    {"transform_data(data)" if pipeline_type == "ETL" else "load_raw_data(data)"}
-    
-    # Transformations: {', '.join(transforms) if transforms else 'None selected'}
-    {"for transform in transforms:" if transforms else "# No transformations selected"}
-    {"    data = apply_transform(data, transform)" if transforms else ""}
-    
-    # Load to {destination}
-    print(f"Loading to {destination} using {load_mode} mode...")
-    
-    return data
-
-# Run pipeline
-result = {pipeline_type.lower()}_pipeline()
-print("Pipeline completed successfully!")
-            """
-            st.code(pipeline_code, language='python')
-            
-            # Pipeline visualization
-            st.markdown("### 📊 Pipeline Flow")
-            
-            if pipeline_type == "ETL":
-                flow_data = pd.DataFrame({
-                    'Stage': ['Extract', 'Transform', 'Load'],
-                    'Duration': [2, 8, 3],
-                    'Data_Size': [100, 85, 85]
-                })
-            else:
-                flow_data = pd.DataFrame({
-                    'Stage': ['Extract', 'Load', 'Transform'],
-                    'Duration': [2, 3, 6], 
-                    'Data_Size': [100, 100, 85]
-                })
-            
-            fig = px.line(flow_data, x='Stage', y=['Duration', 'Data_Size'],
-                         title=f'{pipeline_type} Pipeline Metrics')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        st.subheader("📊 ETL Pipeline Analytics")
+        st.markdown("### 🏗️ ETL Architecture Evolution")
         
-        # Generate sample ETL pipeline performance data
-        np.random.seed(44)
-        n_runs = 100
-        
-        etl_data = pd.DataFrame({
-            'pipeline_id': np.random.choice(['user_pipeline', 'transaction_pipeline', 'analytics_pipeline', 'ml_pipeline'], n_runs),
-            'execution_time_min': np.random.lognormal(mean=2, sigma=0.8, size=n_runs).round(1),
-            'records_processed': np.random.exponential(scale=50000, size=n_runs).round(0).astype(int),
-            'extract_time_min': np.random.gamma(shape=2, scale=5, size=n_runs).round(1),
-            'transform_time_min': np.random.gamma(shape=3, scale=8, size=n_runs).round(1),
-            'load_time_min': np.random.gamma(shape=1.5, scale=3, size=n_runs).round(1),
-            'success_rate': np.random.beta(a=9, b=1, size=n_runs) * 100,
-            'data_quality_score': np.random.beta(a=8, b=2, size=n_runs) * 100,
-            'cpu_usage_percent': np.random.normal(loc=60, scale=15, size=n_runs).clip(10, 100).round(1),
-            'memory_usage_gb': np.random.exponential(scale=8, size=n_runs).round(1),
-            'error_count': np.random.poisson(lam=2, size=n_runs),
-            'pipeline_type': np.random.choice(['Batch', 'Streaming', 'Micro-batch'], n_runs, p=[0.6, 0.25, 0.15])
+        evolution_data = pd.DataFrame({
+            'Era': ['Traditional ETL\n(2000-2010)', 'Big Data ETL\n(2010-2015)', 'Cloud ETL\n(2015-2020)', 'Modern ELT\n(2020-Present)'],
+            'Tools': ['Informatica\nTalend\nSSIS', 'Hadoop\nSpark\nHive', 'AWS Glue\nAzure Data Factory\nDataflow', 'Snowflake\ndbt\nFivetran'],
+            'Scale': ['GBs', 'TBs', 'PBs', 'Exabytes'],
+            'Latency': ['Hours', 'Minutes', 'Seconds', 'Real-time'],
+            'Complexity': [3, 6, 4, 2]
         })
         
-        # Add derived metrics
-        etl_data['throughput'] = etl_data['records_processed'] / etl_data['execution_time_min']
-        etl_data['efficiency'] = (etl_data['records_processed'] / 1000) / etl_data['cpu_usage_percent']
+        fig = px.scatter(evolution_data, x='Era', y='Complexity', size='Scale', color='Latency',
+                        title='ETL Technology Evolution',
+                        labels={'Complexity': 'Implementation Complexity (1-10)'})
+        st.plotly_chart(fig, use_container_width=True)
         
-        chart_type = st.selectbox("Choose ETL Analytics:", 
-            ["Pipeline Performance", "Resource Utilization", "Data Quality Metrics", "Error Analysis", "Throughput Analysis"])
-        
-        if chart_type == "Pipeline Performance":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Execution time by pipeline
-                fig_perf1 = px.box(etl_data, x='pipeline_id', y='execution_time_min',
-                                  title='Execution Time by Pipeline',
-                                  labels={'execution_time_min': 'Execution Time (min)', 'pipeline_id': 'Pipeline'})
-                fig_perf1.update_layout(height=400, xaxis_tickangle=-45)
-                st.plotly_chart(fig_perf1, use_container_width=True)
-                
-            with col2:
-                # Success rate distribution
-                fig_perf2 = px.histogram(etl_data, x='success_rate', nbins=20,
-                                        title='Success Rate Distribution',
-                                        labels={'success_rate': 'Success Rate (%)', 'count': 'Pipeline Runs'})
-                fig_perf2.update_layout(height=400)
-                st.plotly_chart(fig_perf2, use_container_width=True)
-            
-            # ETL stages breakdown
-            stage_data = pd.DataFrame({
-                'Stage': ['Extract', 'Transform', 'Load'] * len(etl_data),
-                'Time': list(etl_data['extract_time_min']) + list(etl_data['transform_time_min']) + list(etl_data['load_time_min']),
-                'Pipeline': list(etl_data['pipeline_id']) * 3
-            })
-            
-            fig_perf3 = px.violin(stage_data, x='Stage', y='Time', color='Stage',
-                                 title='ETL Stage Time Distribution')
-            st.plotly_chart(fig_perf3, use_container_width=True)
-            
-        elif chart_type == "Resource Utilization":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # CPU vs Memory usage
-                fig_res1 = px.scatter(etl_data, x='cpu_usage_percent', y='memory_usage_gb',
-                                     color='pipeline_type', size='records_processed',
-                                     title='Resource Usage by Pipeline Type',
-                                     labels={'cpu_usage_percent': 'CPU Usage (%)', 'memory_usage_gb': 'Memory Usage (GB)'})
-                fig_res1.update_layout(height=400)
-                st.plotly_chart(fig_res1, use_container_width=True)
-                
-            with col2:
-                # Resource usage by pipeline
-                fig_res2 = px.box(etl_data, x='pipeline_id', y='cpu_usage_percent',
-                                 title='CPU Usage by Pipeline',
-                                 labels={'cpu_usage_percent': 'CPU Usage (%)', 'pipeline_id': 'Pipeline'})
-                fig_res2.update_layout(height=400, xaxis_tickangle=-45)
-                st.plotly_chart(fig_res2, use_container_width=True)
-            
-            # Memory efficiency
-            fig_res3 = px.bar(etl_data.groupby('pipeline_type')['memory_usage_gb'].mean().reset_index(),
-                             x='pipeline_type', y='memory_usage_gb',
-                             title='Average Memory Usage by Pipeline Type',
-                             labels={'memory_usage_gb': 'Average Memory Usage (GB)', 'pipeline_type': 'Pipeline Type'})
-            st.plotly_chart(fig_res3, use_container_width=True)
-            
-        elif chart_type == "Data Quality Metrics":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Data quality by pipeline
-                fig_qual1 = px.violin(etl_data, x='pipeline_id', y='data_quality_score',
-                                     title='Data Quality Score by Pipeline',
-                                     labels={'data_quality_score': 'Quality Score (%)', 'pipeline_id': 'Pipeline'})
-                fig_qual1.update_layout(height=400, xaxis_tickangle=-45)
-                st.plotly_chart(fig_qual1, use_container_width=True)
-                
-            with col2:
-                # Quality vs execution time
-                fig_qual2 = px.scatter(etl_data, x='execution_time_min', y='data_quality_score',
-                                      color='pipeline_type',
-                                      title='Quality vs Execution Time',
-                                      labels={'execution_time_min': 'Execution Time (min)', 'data_quality_score': 'Quality Score (%)'})
-                fig_qual2.update_layout(height=400)
-                st.plotly_chart(fig_qual2, use_container_width=True)
-            
-            # Quality trends
-            quality_by_type = etl_data.groupby('pipeline_type')['data_quality_score'].mean().sort_values(ascending=False)
-            fig_qual3 = px.bar(x=quality_by_type.index, y=quality_by_type.values,
-                              title='Average Data Quality by Pipeline Type',
-                              labels={'x': 'Pipeline Type', 'y': 'Average Quality Score (%)'})
-            st.plotly_chart(fig_qual3, use_container_width=True)
-            
-        elif chart_type == "Error Analysis":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Error count distribution
-                fig_err1 = px.histogram(etl_data, x='error_count', nbins=15,
-                                       title='Error Count Distribution',
-                                       labels={'error_count': 'Number of Errors', 'count': 'Pipeline Runs'})
-                fig_err1.update_layout(height=400)
-                st.plotly_chart(fig_err1, use_container_width=True)
-                
-            with col2:
-                # Errors by pipeline type
-                fig_err2 = px.box(etl_data, x='pipeline_type', y='error_count',
-                                 title='Errors by Pipeline Type',
-                                 labels={'error_count': 'Number of Errors', 'pipeline_type': 'Pipeline Type'})
-                fig_err2.update_layout(height=400)
-                st.plotly_chart(fig_err2, use_container_width=True)
-            
-            # Error correlation with performance
-            fig_err3 = px.scatter(etl_data, x='error_count', y='execution_time_min',
-                                 color='pipeline_id', size='records_processed',
-                                 title='Error Impact on Performance',
-                                 labels={'error_count': 'Number of Errors', 'execution_time_min': 'Execution Time (min)'})
-            st.plotly_chart(fig_err3, use_container_width=True)
-            
-        elif chart_type == "Throughput Analysis":
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Throughput by pipeline
-                fig_thru1 = px.box(etl_data, x='pipeline_id', y='throughput',
-                                  title='Throughput by Pipeline',
-                                  labels={'throughput': 'Records/Min', 'pipeline_id': 'Pipeline'})
-                fig_thru1.update_layout(height=400, xaxis_tickangle=-45)
-                st.plotly_chart(fig_thru1, use_container_width=True)
-                
-            with col2:
-                # Efficiency vs records processed
-                fig_thru2 = px.scatter(etl_data, x='records_processed', y='efficiency',
-                                      color='pipeline_type',
-                                      title='Pipeline Efficiency',
-                                      labels={'records_processed': 'Records Processed', 'efficiency': 'Efficiency Score'})
-                fig_thru2.update_layout(height=400)
-                st.plotly_chart(fig_thru2, use_container_width=True)
-            
-            # Throughput trends
-            throughput_stats = etl_data.groupby('pipeline_type')['throughput'].agg(['mean', 'std']).reset_index()
-            fig_thru3 = go.Figure()
-            fig_thru3.add_trace(go.Bar(x=throughput_stats['pipeline_type'], 
-                                      y=throughput_stats['mean'],
-                                      error_y=dict(type='data', array=throughput_stats['std']),
-                                      name='Average Throughput'))
-            fig_thru3.update_layout(title='Throughput by Pipeline Type (with std dev)',
-                                   xaxis_title='Pipeline Type',
-                                   yaxis_title='Throughput (Records/Min)')
-            st.plotly_chart(fig_thru3, use_container_width=True)
-    
-    with tab4:
-        st.subheader("🔄 ETL Process Flow Charts")
-        
-        flow_type = st.selectbox("Choose ETL Flow:", 
-            ["Classic ETL Process", "Modern ELT Process", "Lambda Architecture", "Kappa Architecture", "DataOps Pipeline"])
-        
-        if flow_type == "Classic ETL Process":
-            fig_etl = go.Figure()
-            
-            nodes = {
-                'Source\nSystems': (1, 8),
-                'Data\nExtraction': (3, 8),
-                'Staging\nArea': (5, 8),
-                'Data\nValidation': (7, 8),
-                'Data\nTransformation': (9, 8),
-                'Data\nCleansing': (9, 6),
-                'Business\nRules': (11, 8),
-                'Target\nDatabase': (13, 8),
-                'Data\nQuality': (7, 6),
-                'Error\nHandling': (5, 6),
-                'Monitoring': (11, 6)
-            }
-            
-            for node, (x, y) in nodes.items():
-                if 'Source' in node or 'Target' in node:
-                    color = 'lightgreen'
-                elif 'Transform' in node or 'Rules' in node:
-                    color = 'orange'
-                elif 'Error' in node or 'Quality' in node or 'Monitoring' in node:
-                    color = 'lightcoral'
-                else:
-                    color = 'lightblue'
-                    
-                fig_etl.add_shape(type="rect", x0=x-0.7, y0=y-0.4, x1=x+0.7, y1=y+0.4,
-                                 fillcolor=color, line=dict(color="black", width=2))
-                fig_etl.add_annotation(x=x, y=y, text=node, showarrow=False, font=dict(size=8))
-            
-            connections = [
-                ('Source\nSystems', 'Data\nExtraction'), ('Data\nExtraction', 'Staging\nArea'),
-                ('Staging\nArea', 'Data\nValidation'), ('Data\nValidation', 'Data\nTransformation'),
-                ('Data\nTransformation', 'Business\nRules'), ('Business\nRules', 'Target\nDatabase'),
-                ('Data\nTransformation', 'Data\nCleansing'), ('Data\nValidation', 'Data\nQuality'),
-                ('Staging\nArea', 'Error\nHandling'), ('Business\nRules', 'Monitoring')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]
-                x1, y1 = nodes[end]
-                fig_etl.add_annotation(ax=x0, ay=y0, x=x1, y=y1, arrowhead=2, arrowsize=1, arrowwidth=2)
-            
-            fig_etl.update_layout(
-                title="Classic ETL Process Flow",
-                xaxis=dict(range=[0, 14], showgrid=False, showticklabels=False),
-                yaxis=dict(range=[5, 9], showgrid=False, showticklabels=False),
-                height=500,
-                showlegend=False
-            )
-            st.plotly_chart(fig_etl, use_container_width=True)
-            
-            st.markdown("""
-            **Classic ETL Components:**
-            - **Extract**: Pull data from source systems
-            - **Staging**: Temporary storage for raw data
-            - **Validation**: Check data integrity and format
-            - **Transform**: Apply business logic and data conversion
-            - **Load**: Insert processed data into target system
-            - **Quality & Monitoring**: Ensure data quality and track performance
-            """)
-            
-        elif flow_type == "Modern ELT Process":
-            fig_elt = go.Figure()
-            
-            nodes = {
-                'Data\nSources': (1, 8),
-                'Raw Data\nIngestion': (3, 8),
-                'Data\nLake': (5, 8),
-                'Schema\nRegistry': (5, 6),
-                'Transform\nEngine': (7, 8),
-                'Data\nCatalog': (7, 6),
-                'Curated\nData': (9, 8),
-                'Analytics\nWorkbench': (11, 8),
-                'BI Tools': (13, 9),
-                'ML Platform': (13, 7),
-                'Governance': (9, 6)
-            }
-            
-            for node, (x, y) in nodes.items():
-                if 'Lake' in node or 'Curated' in node:
-                    color = 'lightgreen'
-                elif 'Transform' in node or 'Analytics' in node:
-                    color = 'orange'
-                elif 'Registry' in node or 'Catalog' in node or 'Governance' in node:
-                    color = 'lightcoral'
-                else:
-                    color = 'lightblue'
-                    
-                fig_elt.add_shape(type="rect", x0=x-0.7, y0=y-0.4, x1=x+0.7, y1=y+0.4,
-                                 fillcolor=color, line=dict(color="black", width=2))
-                fig_elt.add_annotation(x=x, y=y, text=node, showarrow=False, font=dict(size=8))
-            
-            connections = [
-                ('Data\nSources', 'Raw Data\nIngestion'), ('Raw Data\nIngestion', 'Data\nLake'),
-                ('Data\nLake', 'Schema\nRegistry'), ('Data\nLake', 'Transform\nEngine'),
-                ('Transform\nEngine', 'Data\nCatalog'), ('Transform\nEngine', 'Curated\nData'),
-                ('Curated\nData', 'Analytics\nWorkbench'), ('Analytics\nWorkbench', 'BI Tools'),
-                ('Analytics\nWorkbench', 'ML Platform'), ('Curated\nData', 'Governance')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]
-                x1, y1 = nodes[end]
-                fig_elt.add_annotation(ax=x0, ay=y0, x=x1, y=y1, arrowhead=2, arrowsize=1, arrowwidth=2)
-            
-            fig_elt.update_layout(
-                title="Modern ELT Process Flow",
-                xaxis=dict(range=[0, 14], showgrid=False, showticklabels=False),
-                yaxis=dict(range=[5, 10], showgrid=False, showticklabels=False),
-                height=500,
-                showlegend=False
-            )
-            st.plotly_chart(fig_elt, use_container_width=True)
-            
-            st.markdown("""
-            **Modern ELT Advantages:**
-            - **Raw Data First**: Store data in original format
-            - **Schema on Read**: Define schema when accessing data
-            - **Scalable Storage**: Use cloud data lakes for massive scale
-            - **Flexible Transformations**: Apply transforms as needed
-            - **Multiple Consumers**: BI, ML, and analytics from same source
-            - **Data Governance**: Built-in cataloging and lineage tracking
-            """)
-            
-        elif flow_type == "Lambda Architecture":
-            fig_lambda = go.Figure()
-            
-            nodes = {
-                'Data\nSources': (1, 8),
-                'Message\nQueue': (3, 8),
-                'Batch\nLayer': (5, 9),
-                'Speed\nLayer': (5, 7),
-                'Master\nDataset': (7, 9),
-                'Real-time\nViews': (7, 7),
-                'Serving\nLayer': (9, 8),
-                'Batch\nViews': (9, 10),
-                'Combined\nViews': (11, 8),
-                'Applications': (13, 8)
-            }
-            
-            for node, (x, y) in nodes.items():
-                if 'Batch' in node:
-                    color = 'lightgreen'
-                elif 'Speed' in node or 'Real-time' in node:
-                    color = 'orange'
-                elif 'Serving' in node or 'Combined' in node:
-                    color = 'lightcoral'
-                else:
-                    color = 'lightblue'
-                    
-                fig_lambda.add_shape(type="rect", x0=x-0.7, y0=y-0.4, x1=x+0.7, y1=y+0.4,
-                                    fillcolor=color, line=dict(color="black", width=2))
-                fig_lambda.add_annotation(x=x, y=y, text=node, showarrow=False, font=dict(size=8))
-            
-            connections = [
-                ('Data\nSources', 'Message\nQueue'), ('Message\nQueue', 'Batch\nLayer'),
-                ('Message\nQueue', 'Speed\nLayer'), ('Batch\nLayer', 'Master\nDataset'),
-                ('Speed\nLayer', 'Real-time\nViews'), ('Master\nDataset', 'Batch\nViews'),
-                ('Batch\nViews', 'Serving\nLayer'), ('Real-time\nViews', 'Serving\nLayer'),
-                ('Serving\nLayer', 'Combined\nViews'), ('Combined\nViews', 'Applications')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]
-                x1, y1 = nodes[end]
-                fig_lambda.add_annotation(ax=x0, ay=y0, x=x1, y=y1, arrowhead=2, arrowsize=1, arrowwidth=2)
-            
-            fig_lambda.update_layout(
-                title="Lambda Architecture Flow",
-                xaxis=dict(range=[0, 14], showgrid=False, showticklabels=False),
-                yaxis=dict(range=[6, 11], showgrid=False, showticklabels=False),
-                height=500,
-                showlegend=False
-            )
-            st.plotly_chart(fig_lambda, use_container_width=True)
-            
-            st.markdown("""
-            **Lambda Architecture Benefits:**
-            - **Dual Processing**: Batch for accuracy, stream for speed
-            - **Fault Tolerance**: Batch layer provides backup for speed layer
-            - **Comprehensive Views**: Combines batch and real-time perspectives
-            - **Scalability**: Each layer can scale independently
-            - **Complexity Trade-off**: More complex but handles all data scenarios
-            """)
-            
-        elif flow_type == "Kappa Architecture":
-            fig_kappa = go.Figure()
-            
-            nodes = {
-                'Data\nSources': (1, 8),
-                'Event\nStreaming': (3, 8),
-                'Stream\nProcessing': (5, 8),
-                'Reprocessing\nCapability': (5, 6),
-                'Speed\nLayer': (7, 8),
-                'Storage\nLayer': (9, 8),
-                'Serving\nLayer': (11, 8),
-                'Applications': (13, 8),
-                'Checkpointing': (7, 6),
-                'State\nManagement': (9, 6)
-            }
-            
-            for node, (x, y) in nodes.items():
-                if 'Stream' in node or 'Speed' in node:
-                    color = 'orange'
-                elif 'Storage' in node or 'Serving' in node:
-                    color = 'lightgreen'
-                elif 'Reprocessing' in node or 'Checkpointing' in node or 'State' in node:
-                    color = 'lightcoral'
-                else:
-                    color = 'lightblue'
-                    
-                fig_kappa.add_shape(type="rect", x0=x-0.7, y0=y-0.4, x1=x+0.7, y1=y+0.4,
-                                   fillcolor=color, line=dict(color="black", width=2))
-                fig_kappa.add_annotation(x=x, y=y, text=node, showarrow=False, font=dict(size=8))
-            
-            connections = [
-                ('Data\nSources', 'Event\nStreaming'), ('Event\nStreaming', 'Stream\nProcessing'),
-                ('Stream\nProcessing', 'Reprocessing\nCapability'), ('Stream\nProcessing', 'Speed\nLayer'),
-                ('Speed\nLayer', 'Storage\nLayer'), ('Speed\nLayer', 'Checkpointing'),
-                ('Storage\nLayer', 'Serving\nLayer'), ('Storage\nLayer', 'State\nManagement'),
-                ('Serving\nLayer', 'Applications'), ('Reprocessing\nCapability', 'Speed\nLayer')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]
-                x1, y1 = nodes[end]
-                fig_kappa.add_annotation(ax=x0, ay=y0, x=x1, y=y1, arrowhead=2, arrowsize=1, arrowwidth=2)
-            
-            fig_kappa.update_layout(
-                title="Kappa Architecture Flow",
-                xaxis=dict(range=[0, 14], showgrid=False, showticklabels=False),
-                yaxis=dict(range=[5, 9], showgrid=False, showticklabels=False),
-                height=500,
-                showlegend=False
-            )
-            st.plotly_chart(fig_kappa, use_container_width=True)
-            
-            st.markdown("""
-            **Kappa Architecture Principles:**
-            - **Stream-Only**: Everything is processed as streams
-            - **Reprocessing**: Historical data can be reprocessed from event logs
-            - **Simplified**: Single processing paradigm reduces complexity
-            - **Real-time Focus**: Optimized for low-latency processing
-            - **State Management**: Maintains processing state for fault tolerance
-            """)
-            
-        elif flow_type == "DataOps Pipeline":
-            fig_dataops = go.Figure()
-            
-            nodes = {
-                'Source\nCode': (1, 9),
-                'Data\nSources': (1, 7),
-                'Version\nControl': (3, 9),
-                'CI/CD\nPipeline': (5, 9),
-                'Testing\nFramework': (5, 7),
-                'Data\nValidation': (7, 7),
-                'Staging\nEnvironment': (7, 9),
-                'Production\nDeployment': (9, 9),
-                'Monitoring': (11, 9),
-                'Alerting': (11, 7),
-                'Rollback\nCapability': (9, 7),
-                'Documentation': (3, 7)
-            }
-            
-            for node, (x, y) in nodes.items():
-                if 'Production' in node or 'Staging' in node:
-                    color = 'lightgreen'
-                elif 'Testing' in node or 'Validation' in node:
-                    color = 'orange'
-                elif 'Monitoring' in node or 'Alerting' in node or 'Rollback' in node:
-                    color = 'lightcoral'
-                else:
-                    color = 'lightblue'
-                    
-                fig_dataops.add_shape(type="rect", x0=x-0.7, y0=y-0.4, x1=x+0.7, y1=y+0.4,
-                                     fillcolor=color, line=dict(color="black", width=2))
-                fig_dataops.add_annotation(x=x, y=y, text=node, showarrow=False, font=dict(size=8))
-            
-            connections = [
-                ('Source\nCode', 'Version\nControl'), ('Version\nControl', 'CI/CD\nPipeline'),
-                ('CI/CD\nPipeline', 'Testing\nFramework'), ('Testing\nFramework', 'Data\nValidation'),
-                ('CI/CD\nPipeline', 'Staging\nEnvironment'), ('Data\nValidation', 'Staging\nEnvironment'),
-                ('Staging\nEnvironment', 'Production\nDeployment'), ('Production\nDeployment', 'Monitoring'),
-                ('Monitoring', 'Alerting'), ('Alerting', 'Rollback\nCapability'),
-                ('Version\nControl', 'Documentation'), ('Data\nSources', 'Testing\nFramework')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]
-                x1, y1 = nodes[end]
-                fig_dataops.add_annotation(ax=x0, ay=y0, x=x1, y=y1, arrowhead=2, arrowsize=1, arrowwidth=2)
-            
-            fig_dataops.update_layout(
-                title="DataOps Pipeline Flow",
-                xaxis=dict(range=[0, 12], showgrid=False, showticklabels=False),
-                yaxis=dict(range=[6, 10], showgrid=False, showticklabels=False),
-                height=500,
-                showlegend=False
-            )
-            st.plotly_chart(fig_dataops, use_container_width=True)
-            
-            st.markdown("""
-            **DataOps Pipeline Features:**
-            - **Version Control**: Track changes to data pipelines and schemas
-            - **CI/CD Integration**: Automated testing and deployment
-            - **Data Testing**: Validate data quality and business rules
-            - **Environment Management**: Staging and production environments
-            - **Monitoring**: Real-time pipeline health and performance tracking
-            - **Automated Rollback**: Quick recovery from failed deployments
-            """)
-    
     with tab5:
-        st.subheader("🏢 Real-World Pipeline Examples")
+        st.subheader(f"📚 {company_name} ETL Schema Documentation")
+        st.markdown("**Complete schema documentation for ETL pipelines and staging data**")
         
-        # Pipeline orchestration tools
-        st.markdown("### 🎼 Orchestration Tools")
+        # This will be implemented next
+        st.markdown("## 📚 ETL Schema Documentation")
+        st.markdown("Complete schema reference for ETL pipelines and staging data across all architectures.")
         
-        orchestration_tools = {
-            "Apache Airflow": {
-                "icon": "🌪️",
-                "description": "Python-based workflow orchestration",
-                "use_case": "Complex dependencies, Python-heavy pipelines",
-                "companies": ["Airbnb", "Netflix", "Adobe"]
-            },
-            "AWS Glue": {
-                "icon": "🔗", 
-                "description": "Serverless ETL service",
-                "use_case": "Cloud-native ETL, automatic scaling",
-                "companies": ["Amazon", "Capital One", "Johnson & Johnson"]
-            },
-            "dbt": {
-                "icon": "🛠️",
-                "description": "Transform data in warehouse using SQL",
-                "use_case": "Analytics engineering, ELT transformations", 
-                "companies": ["GitLab", "Shopify", "Fishtown Analytics"]
+        # Schema categories
+        schema_section = st.selectbox(
+            "Select Schema Category:",
+            ["📊 Staging Data Schemas", "⚙️ Processing Jobs Schema", "📋 ETL Manifests Schema", "🔗 Data Lineage Schema"]
+        )
+        
+        if schema_section == "📊 Staging Data Schemas":
+            st.markdown("### 📊 Staging Data Table Schemas")
+            st.markdown("Cleaned, typed records ready for joins and analytics")
+            
+            # Company staging schemas
+            company_schemas = {
+                "🚗 Uber": {
+                    "table": "staging_uber_rides",
+                    "description": "Processed ride data with geographic coordinates and fare breakdown",
+                    "schema": {
+                        "ride_id": {"type": "TEXT PRIMARY KEY", "description": "Unique ride identifier"},
+                        "driver_id": {"type": "TEXT", "description": "Driver identifier"},
+                        "rider_id": {"type": "TEXT", "description": "Rider identifier"},
+                        "pickup_ts": {"type": "TEXT", "description": "ISO timestamp of pickup"},
+                        "dropoff_ts": {"type": "TEXT", "description": "ISO timestamp of dropoff"},
+                        "pickup_coord": {"type": "TEXT (JSON)", "description": "Pickup coordinates: {\"lat\": float, \"lng\": float}"},
+                        "dropoff_coord": {"type": "TEXT (JSON)", "description": "Dropoff coordinates: {\"lat\": float, \"lng\": float}"},
+                        "distance_km": {"type": "REAL", "description": "Trip distance in kilometers"},
+                        "fare_aed": {"type": "REAL", "description": "Total fare in AED"},
+                        "fare_base": {"type": "REAL", "description": "Base fare component in AED"},
+                        "fare_taxes": {"type": "REAL", "description": "Tax component in AED"},
+                        "status": {"type": "TEXT", "description": "Ride status: completed, cancelled, ongoing"},
+                        "ingest_latency_ms": {"type": "INTEGER", "description": "ETL processing latency in milliseconds"},
+                        "etl_batch_id": {"type": "TEXT", "description": "ETL batch identifier for lineage"},
+                        "processed_ts": {"type": "TEXT", "description": "ETL processing timestamp"}
+                    }
+                },
+                "📺 Netflix": {
+                    "table": "staging_netflix_events",
+                    "description": "Processed streaming events with content metadata and user behavior",
+                    "schema": {
+                        "event_id": {"type": "TEXT PRIMARY KEY", "description": "Unique event identifier"},
+                        "user_id": {"type": "TEXT", "description": "User identifier"},
+                        "content_id": {"type": "TEXT", "description": "Content identifier"},
+                        "genre": {"type": "TEXT", "description": "Content genre category"},
+                        "device": {"type": "TEXT", "description": "Playback device type"},
+                        "event_ts": {"type": "TEXT", "description": "Event timestamp"},
+                        "playback_sec": {"type": "INTEGER", "description": "Playback duration in seconds"},
+                        "country": {"type": "TEXT", "description": "User country code"},
+                        "session_id": {"type": "TEXT", "description": "User session identifier"},
+                        "quality": {"type": "TEXT", "description": "Video quality: 480p, 720p, 1080p, 4K"},
+                        "etl_batch_id": {"type": "TEXT", "description": "ETL batch identifier"},
+                        "processed_ts": {"type": "TEXT", "description": "ETL processing timestamp"}
+                    }
+                },
+                "🛒 Amazon": {
+                    "table": "staging_amazon_orders",
+                    "description": "Processed order data with fulfillment and financial details",
+                    "schema": {
+                        "order_id": {"type": "TEXT PRIMARY KEY", "description": "Unique order identifier"},
+                        "customer_id": {"type": "TEXT", "description": "Customer identifier"},
+                        "order_ts": {"type": "TEXT", "description": "Order placement timestamp"},
+                        "items_count": {"type": "INTEGER", "description": "Number of items in order"},
+                        "subtotal_aed": {"type": "REAL", "description": "Order subtotal in AED"},
+                        "shipping_aed": {"type": "REAL", "description": "Shipping cost in AED"},
+                        "tax_aed": {"type": "REAL", "description": "Tax amount in AED"},
+                        "total_aed": {"type": "REAL", "description": "Total order value in AED"},
+                        "fulfillment_center": {"type": "TEXT", "description": "Fulfilling warehouse identifier"},
+                        "priority": {"type": "TEXT", "description": "Order priority: standard, expedited, prime"},
+                        "etl_batch_id": {"type": "TEXT", "description": "ETL batch identifier"},
+                        "processed_ts": {"type": "TEXT", "description": "ETL processing timestamp"}
+                    }
+                },
+                "🏠 Airbnb": {
+                    "table": "staging_airbnb_reservations",
+                    "description": "Processed booking data with property and guest information",
+                    "schema": {
+                        "booking_id": {"type": "TEXT PRIMARY KEY", "description": "Unique booking identifier"},
+                        "host_id": {"type": "TEXT", "description": "Host identifier"},
+                        "guest_id": {"type": "TEXT", "description": "Guest identifier"},
+                        "property_id": {"type": "TEXT", "description": "Property identifier"},
+                        "checkin_date": {"type": "TEXT", "description": "Check-in date (YYYY-MM-DD)"},
+                        "checkout_date": {"type": "TEXT", "description": "Check-out date (YYYY-MM-DD)"},
+                        "nights": {"type": "INTEGER", "description": "Number of nights"},
+                        "price_aed": {"type": "REAL", "description": "Total booking price in AED"},
+                        "status": {"type": "TEXT", "description": "Booking status: confirmed, cancelled, pending"},
+                        "property_type": {"type": "TEXT", "description": "Property type: apartment, house, room"},
+                        "etl_batch_id": {"type": "TEXT", "description": "ETL batch identifier"},
+                        "processed_ts": {"type": "TEXT", "description": "ETL processing timestamp"}
+                    }
+                },
+                "📈 NYSE": {
+                    "table": "staging_nyse_trades",
+                    "description": "Processed high-frequency trading data with market metadata",
+                    "schema": {
+                        "tick_id": {"type": "TEXT PRIMARY KEY", "description": "Unique tick identifier"},
+                        "ticker": {"type": "TEXT", "description": "Stock ticker symbol"},
+                        "timestamp_ms": {"type": "INTEGER", "description": "Trade timestamp in milliseconds"},
+                        "price": {"type": "REAL", "description": "Trade price in USD"},
+                        "size": {"type": "INTEGER", "description": "Trade volume (shares)"},
+                        "venue": {"type": "TEXT", "description": "Trading venue identifier"},
+                        "is_auction": {"type": "INTEGER", "description": "Auction trade flag (0/1)"},
+                        "market_hours": {"type": "TEXT", "description": "Market session: pre, regular, after"},
+                        "etl_batch_id": {"type": "TEXT", "description": "ETL batch identifier"},
+                        "processed_ts": {"type": "TEXT", "description": "ETL processing timestamp"}
+                    }
+                }
             }
-        }
+            
+            for company, schema_info in company_schemas.items():
+                with st.expander(f"{company} - {schema_info['table']}"):
+                    st.markdown(f"**Description:** {schema_info['description']}")
+                    
+                    # Create schema table
+                    schema_data = []
+                    for field, details in schema_info['schema'].items():
+                        schema_data.append({
+                            "Field": field,
+                            "Type": details['type'],
+                            "Description": details['description']
+                        })
+                    
+                    df_schema = pd.DataFrame(schema_data)
+                    st.dataframe(df_schema, use_container_width=True, hide_index=True)
+                    
+                    # SQL CREATE TABLE statement
+                    with st.expander("📝 SQL CREATE TABLE Statement"):
+                        create_sql = f"CREATE TABLE IF NOT EXISTS {schema_info['table']} (\n"
+                        for field, details in schema_info['schema'].items():
+                            create_sql += f"  {field} {details['type']},\n"
+                        create_sql = create_sql.rstrip(",\n") + "\n);"
+                        st.code(create_sql, language="sql")
         
-        for tool, details in orchestration_tools.items():
-            with st.expander(f"{details['icon']} {tool}"):
-                st.markdown(f"**Description:** {details['description']}")
-                st.markdown(f"**Best for:** {details['use_case']}")
-                st.markdown(f"**Used by:** {', '.join(details['companies'])}")
-        
-        # Company-specific pipelines
-        st.markdown("### 🏢 Company Pipeline Examples")
-        
-        pipeline_examples = {
-            "Airbnb": {
-                "icon": "🏠",
-                "pipeline": "User data → Airflow → Spark → Hive → Presto",
-                "frequency": "Hourly batch jobs",
-                "challenge": "Handling seasonal booking patterns",
-                "solution": "Dynamic scaling with Airflow + Kubernetes"
-            },
-            "Amazon": {
-                "icon": "🛒", 
-                "pipeline": "Orders → Kinesis → Lambda → Glue → Redshift",
-                "frequency": "Real-time + daily aggregations",
-                "challenge": "Processing millions of orders",
-                "solution": "Serverless architecture with auto-scaling"
-            },
-            "Netflix": {
-                "icon": "🎬",
-                "pipeline": "Viewing events → Kafka → Spark → S3 → ML models",
-                "frequency": "Real-time streaming",
-                "challenge": "Personalized recommendations at scale", 
-                "solution": "Stream processing + batch ML training"
+        elif schema_section == "⚙️ Processing Jobs Schema":
+            st.markdown("### ⚙️ Processing Jobs Metadata Schema")
+            st.markdown("Track ETL job execution, performance, and resource utilization across all processing engines.")
+            
+            jobs_schema = {
+                "job_id": {"type": "TEXT PRIMARY KEY", "description": "Unique job execution identifier"},
+                "company": {"type": "TEXT", "description": "Company namespace (uber, netflix, amazon, airbnb, nyse)"},
+                "job_name": {"type": "TEXT", "description": "ETL job name/identifier"},
+                "job_type": {"type": "TEXT", "description": "Processing type: batch, stream, micro-batch"},
+                "engine": {"type": "TEXT", "description": "Processing engine: spark, flink, airflow, dbt, glue"},
+                "input_path": {"type": "TEXT", "description": "Source data path or table"},
+                "output_path": {"type": "TEXT", "description": "Destination data path or table"},
+                "records_in": {"type": "INTEGER", "description": "Number of input records processed"},
+                "records_out": {"type": "INTEGER", "description": "Number of output records generated"},
+                "start_ts": {"type": "TEXT", "description": "Job start timestamp (ISO format)"},
+                "end_ts": {"type": "TEXT", "description": "Job completion timestamp (ISO format)"},
+                "duration_ms": {"type": "INTEGER", "description": "Job execution duration in milliseconds"},
+                "status": {"type": "TEXT", "description": "Job status: running, completed, failed, cancelled"},
+                "error_msg": {"type": "TEXT", "description": "Error message if job failed (NULL if successful)"},
+                "resource_cpu_cores": {"type": "INTEGER", "description": "CPU cores allocated to job"},
+                "resource_memory_gb": {"type": "INTEGER", "description": "Memory allocated in GB"},
+                "data_quality_score": {"type": "REAL", "description": "Data quality score (0.0-1.0)"},
+                "batch_id": {"type": "TEXT", "description": "ETL batch identifier for grouping related jobs"}
             }
-        }
+            
+            # Display jobs schema table
+            jobs_data = []
+            for field, details in jobs_schema.items():
+                jobs_data.append({
+                    "Field": field,
+                    "Type": details['type'],
+                    "Description": details['description']
+                })
+            
+            df_jobs = pd.DataFrame(jobs_data)
+            st.dataframe(df_jobs, use_container_width=True, hide_index=True)
+            
+            # Job status values
+            st.markdown("#### 🔄 Job Status Values")
+            status_info = {
+                "running": {"color": "🟡", "description": "Job is currently executing"},
+                "completed": {"color": "🟢", "description": "Job finished successfully"},
+                "failed": {"color": "🔴", "description": "Job encountered an error and stopped"},
+                "cancelled": {"color": "🟠", "description": "Job was manually terminated"}
+            }
+            
+            for status, info in status_info.items():
+                st.markdown(f"- {info['color']} **{status}**: {info['description']}")
+            
+            # SQL CREATE statement
+            with st.expander("📝 SQL CREATE TABLE Statement"):
+                create_sql = "CREATE TABLE IF NOT EXISTS processing_jobs (\n"
+                for field, details in jobs_schema.items():
+                    create_sql += f"  {field} {details['type']},\n"
+                create_sql = create_sql.rstrip(",\n") + "\n);"
+                st.code(create_sql, language="sql")
         
-        for company, pipeline in pipeline_examples.items():
-            with st.expander(f"{pipeline['icon']} {company} Pipeline"):
-                st.markdown(f"**Pipeline:** {pipeline['pipeline']}")
-                st.markdown(f"**Frequency:** {pipeline['frequency']}")
-                st.markdown(f"**Challenge:** {pipeline['challenge']}")
-                st.markdown(f"**Solution:** {pipeline['solution']}")
+        elif schema_section == "📋 ETL Manifests Schema":
+            st.markdown("### 📋 ETL Manifests Schema")
+            st.markdown("Track ETL batch metadata, data lineage, and processing manifests for reproducibility.")
+            
+            manifest_schema = {
+                "manifest_id": {"type": "TEXT PRIMARY KEY", "description": "Unique manifest identifier"},
+                "company": {"type": "TEXT", "description": "Company namespace"},
+                "batch_id": {"type": "TEXT", "description": "ETL batch identifier"},
+                "dataset_name": {"type": "TEXT", "description": "Dataset/table name being processed"},
+                "schema_version": {"type": "TEXT", "description": "Schema version (semantic versioning)"},
+                "row_count": {"type": "INTEGER", "description": "Number of rows processed"},
+                "size_bytes": {"type": "INTEGER", "description": "Data size in bytes"},
+                "checksum": {"type": "TEXT", "description": "Data checksum for integrity verification"},
+                "source_path": {"type": "TEXT", "description": "Source data location"},
+                "target_path": {"type": "TEXT", "description": "Target data location"},
+                "transformation_config": {"type": "TEXT (JSON)", "description": "ETL transformation configuration"},
+                "data_quality_checks": {"type": "TEXT (JSON)", "description": "Data quality validation results"},
+                "created_by": {"type": "TEXT", "description": "Job/user that created the manifest"},
+                "created_ts": {"type": "TEXT", "description": "Manifest creation timestamp"},
+                "retention_days": {"type": "INTEGER", "description": "Data retention period in days"}
+            }
+            
+            # Display manifest schema table
+            manifest_data = []
+            for field, details in manifest_schema.items():
+                manifest_data.append({
+                    "Field": field,
+                    "Type": details['type'],
+                    "Description": details['description']
+                })
+            
+            df_manifest = pd.DataFrame(manifest_data)
+            st.dataframe(df_manifest, use_container_width=True, hide_index=True)
+            
+            # Example JSON structures
+            st.markdown("#### 📝 JSON Field Examples")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**transformation_config example:**")
+                transformation_example = {
+                    "source_format": "json",
+                    "target_format": "parquet",
+                    "transformations": [
+                        {"type": "rename", "from": "user_id", "to": "customer_id"},
+                        {"type": "cast", "field": "price", "to": "decimal"},
+                        {"type": "filter", "condition": "status = 'active'"}
+                    ],
+                    "partition_by": ["date", "region"]
+                }
+                st.code(json.dumps(transformation_example, indent=2), language="json")
+            
+            with col2:
+                st.markdown("**data_quality_checks example:**")
+                quality_example = {
+                    "null_check": {"passed": True, "null_rate": 0.02},
+                    "duplicate_check": {"passed": True, "duplicate_rate": 0.001},
+                    "range_check": {"passed": True, "violations": 0},
+                    "schema_check": {"passed": True, "missing_fields": []},
+                    "overall_score": 0.98
+                }
+                st.code(json.dumps(quality_example, indent=2), language="json")
+            
+            # SQL CREATE statement
+            with st.expander("📝 SQL CREATE TABLE Statement"):
+                create_sql = "CREATE TABLE IF NOT EXISTS etl_manifests (\n"
+                for field, details in manifest_schema.items():
+                    create_sql += f"  {field} {details['type']},\n"
+                create_sql = create_sql.rstrip(",\n") + "\n);"
+                st.code(create_sql, language="sql")
+        
+        elif schema_section == "🔗 Data Lineage Schema":
+            st.markdown("### 🔗 Data Lineage Schema")
+            st.markdown("Track data flow, dependencies, and transformations across ETL pipelines.")
+            
+            st.markdown("#### 📊 ETL Schema Relationships")
+            
+            # Create relationship diagram
+            relationship_data = {
+                "Source": ["raw_landing", "processing_jobs", "etl_manifests", "processing_jobs"],
+                "Target": ["staging_*", "etl_manifests", "staging_*", "processing_jobs"],
+                "Relationship": ["1:N", "1:1", "1:N", "N:1"],
+                "Description": [
+                    "Raw data is processed into multiple staging tables",
+                    "Each processing job generates one manifest",
+                    "One manifest can reference multiple staging tables",
+                    "Multiple jobs can be part of one batch/pipeline"
+                ]
+            }
+            
+            df_relationships = pd.DataFrame(relationship_data)
+            st.dataframe(df_relationships, use_container_width=True, hide_index=True)
+            
+            st.markdown("#### 🔄 Data Flow Patterns")
+            
+            flow_patterns = {
+                "🔄 Batch ETL": {
+                    "pattern": "Raw Landing → Staging → OLTP/OLAP",
+                    "frequency": "Hourly/Daily",
+                    "tools": "Spark, Airflow, dbt"
+                },
+                "⚡ Stream ETL": {
+                    "pattern": "Event Stream → Real-time Staging → Live Tables",
+                    "frequency": "Continuous",
+                    "tools": "Flink, Kafka Streams, Kinesis"
+                },
+                "🔀 Hybrid ETL": {
+                    "pattern": "Batch + Stream → Unified Staging → Analytics",
+                    "frequency": "Mixed",
+                    "tools": "Spark + Flink, Lambda Architecture"
+                }
+            }
+            
+            for pattern_name, details in flow_patterns.items():
+                with st.expander(pattern_name):
+                    st.markdown(f"**Flow:** {details['pattern']}")
+                    st.markdown(f"**Frequency:** {details['frequency']}")
+                    st.markdown(f"**Tools:** {details['tools']}")
+            
+            st.markdown("#### 📋 Common ETL Indexes and Constraints")
+            
+            index_recommendations = {
+                "Performance Indexes": [
+                    "CREATE INDEX idx_staging_rides_pickup_ts ON staging_uber_rides(pickup_ts)",
+                    "CREATE INDEX idx_processing_jobs_start_ts ON processing_jobs(start_ts)",
+                    "CREATE INDEX idx_manifests_batch_id ON etl_manifests(batch_id)"
+                ],
+                "Foreign Key Constraints": [
+                    "-- processing_jobs.batch_id → etl_manifests.batch_id",
+                    "-- staging_*.etl_batch_id → processing_jobs.batch_id"
+                ],
+                "Data Quality Constraints": [
+                    "CHECK (records_in >= 0)",
+                    "CHECK (records_out >= 0)",
+                    "CHECK (data_quality_score BETWEEN 0 AND 1)"
+                ]
+            }
+            
+            for category, indexes in index_recommendations.items():
+                st.markdown(f"**{category}:**")
+                for idx in indexes:
+                    st.code(idx, language="sql")
+
+# ============================================================================
+# MODULE 3: ETL/ELT PIPELINES - CHART HELPER FUNCTIONS  
+# ============================================================================
+
+def create_etl_overview_dashboard(conn, company_name):
+    """Create ETL overview dashboard with key metrics and visualizations"""
+    st.markdown("### 📊 ETL Pipeline Overview")
+    
+    # ETL Jobs Over Time
+    timeline_query = f"""
+    SELECT 
+        DATE(start_ts) as date,
+        COUNT(*) as jobs_count,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
+        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
+        AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END)/1000.0 as avg_duration_sec
+    FROM processing_jobs 
+    WHERE company = '{company_name}'
+    GROUP BY DATE(start_ts)
+    ORDER BY date DESC
+    LIMIT 30
+    """
+    
+    timeline_data = query_module3_data(conn, timeline_query)
+    
+    if not timeline_data.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Jobs over time
+            fig1 = px.bar(timeline_data, x='date', y=['completed', 'failed'], 
+                         title=f"{company_name} ETL Jobs by Status Over Time",
+                         labels={'value': 'Number of Jobs', 'date': 'Date'})
+            st.plotly_chart(fig1, use_container_width=True)
+            
+        with col2:
+            # Average duration trend
+            fig2 = px.line(timeline_data, x='date', y='avg_duration_sec',
+                          title=f"{company_name} Average ETL Duration Trend",
+                          labels={'avg_duration_sec': 'Avg Duration (seconds)', 'date': 'Date'})
+            st.plotly_chart(fig2, use_container_width=True)
+
+def create_etl_performance_charts(conn, company_name):
+    """Create detailed ETL performance analysis charts"""
+    st.markdown("### 📈 ETL Performance Analysis")
+    
+    # Performance by job type and engine
+    performance_query = f"""
+    SELECT 
+        job_type,
+        engine,
+        COUNT(*) as job_count,
+        AVG(duration_ms)/1000.0 as avg_duration_sec,
+        AVG(records_in) as avg_records_in,
+        AVG(records_out) as avg_records_out,
+        AVG(data_quality_score) as avg_quality_score
+    FROM processing_jobs 
+    WHERE company = '{company_name}' AND status = 'completed'
+    GROUP BY job_type, engine
+    """
+    
+    perf_data = query_module3_data(conn, performance_query)
+    
+    if not perf_data.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Duration by engine
+            fig1 = px.box(perf_data, x='engine', y='avg_duration_sec',
+                         title=f"{company_name} ETL Duration by Engine",
+                         labels={'avg_duration_sec': 'Avg Duration (seconds)'})
+            st.plotly_chart(fig1, use_container_width=True)
+            
+        with col2:
+            # Data quality by job type
+            fig2 = px.scatter(perf_data, x='avg_records_in', y='avg_quality_score',
+                             size='job_count', color='job_type',
+                             title=f"{company_name} Data Quality vs Volume",
+                             labels={'avg_records_in': 'Avg Records In', 'avg_quality_score': 'Avg Quality Score'})
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # Resource utilization
+        resource_query = f"""
+        SELECT 
+            resource_cpu_cores,
+            resource_memory_gb,
+            AVG(duration_ms)/1000.0 as avg_duration_sec,
+            COUNT(*) as job_count
+        FROM processing_jobs 
+        WHERE company = '{company_name}' AND status = 'completed'
+        GROUP BY resource_cpu_cores, resource_memory_gb
+        """
+        
+        resource_data = query_module3_data(conn, resource_query)
+        
+        if not resource_data.empty:
+            fig3 = px.scatter(resource_data, x='resource_cpu_cores', y='resource_memory_gb',
+                             size='job_count', color='avg_duration_sec',
+                             title=f"{company_name} Resource Utilization vs Performance",
+                             labels={'resource_cpu_cores': 'CPU Cores', 'resource_memory_gb': 'Memory (GB)'})
+            st.plotly_chart(fig3, use_container_width=True)
 
 def show_processing_systems():
     st.header("⚡ Processing Systems")
