@@ -921,12 +921,24 @@ def populate_module3_data(conn, company_name):
     cursor = conn.cursor()
     
     try:
-        # Check if data already exists
+        # Check if data already exists for this company
         cursor.execute("SELECT COUNT(*) FROM processing_jobs WHERE company = ?", (company_name,))
         job_count = cursor.fetchone()[0]
         
-        if job_count > 0:
-            return  # Data already exists
+        # Also check staging table
+        staging_table_map = {
+            'Uber': 'staging_uber_rides',
+            'Netflix': 'staging_netflix_events',
+            'Amazon': 'staging_amazon_orders', 
+            'Airbnb': 'staging_airbnb_reservations',
+            'NYSE': 'staging_nyse_trades'
+        }
+        staging_table = staging_table_map[company_name]
+        cursor.execute(f"SELECT COUNT(*) FROM {staging_table}")
+        staging_count = cursor.fetchone()[0]
+        
+        if job_count > 0 and staging_count > 0:
+            return  # Data already exists for this company
         
         # Generate ETL job data
         if company_name == "Uber":
@@ -975,8 +987,18 @@ def populate_module3_data(conn, company_name):
         
         conn.commit()
         
+        # Debug: Show what was inserted
+        cursor.execute(f"SELECT COUNT(*) FROM {staging_table}")
+        final_staging_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM processing_jobs WHERE company = ?", (company_name,))
+        final_job_count = cursor.fetchone()[0]
+        
+        st.success(f"✅ Populated {company_name} data: {final_job_count} jobs, {final_staging_count} staging records")
+        
     except Exception as e:
         st.error(f"Error populating Module 3 data for {company_name}: {str(e)}")
+        import traceback
+        st.error(f"Full error: {traceback.format_exc()}")
         raise e
 
 def query_module3_data(conn, query):
@@ -5686,6 +5708,43 @@ def show_etl_pipelines():
         ["Uber", "Netflix", "Amazon", "Airbnb", "NYSE"],
         key="etl_company_selector"
     )
+    
+    # Add debug/refresh option
+    st.sidebar.markdown("### 🔧 Debug Options")
+    if st.sidebar.button("🔄 Force Refresh Data"):
+        # Clear existing data for this company
+        cursor = module3_conn.cursor()
+        staging_table_map = {
+            'Uber': 'staging_uber_rides',
+            'Netflix': 'staging_netflix_events',
+            'Amazon': 'staging_amazon_orders', 
+            'Airbnb': 'staging_airbnb_reservations',
+            'NYSE': 'staging_nyse_trades'
+        }
+        staging_table = staging_table_map[company_name]
+        cursor.execute(f"DELETE FROM {staging_table}")
+        cursor.execute("DELETE FROM processing_jobs WHERE company = ?", (company_name,))
+        cursor.execute("DELETE FROM etl_manifests WHERE company = ?", (company_name,))
+        module3_conn.commit()
+        st.sidebar.success(f"Cleared {company_name} data - refresh page to regenerate")
+    
+    # Show database status
+    cursor = module3_conn.cursor()
+    staging_table_map = {
+        'Uber': 'staging_uber_rides',
+        'Netflix': 'staging_netflix_events',
+        'Amazon': 'staging_amazon_orders', 
+        'Airbnb': 'staging_airbnb_reservations',
+        'NYSE': 'staging_nyse_trades'
+    }
+    staging_table = staging_table_map[company_name]
+    cursor.execute(f"SELECT COUNT(*) FROM {staging_table}")
+    staging_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM processing_jobs WHERE company = ?", (company_name,))
+    job_count = cursor.fetchone()[0]
+    
+    if staging_count == 0 or job_count == 0:
+        st.info(f"🔄 Initializing {company_name} data... (Jobs: {job_count}, Staging: {staging_count})")
     
     # Populate data for selected company
     populate_module3_data(module3_conn, company_name)
