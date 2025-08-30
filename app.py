@@ -6754,208 +6754,580 @@ by sym from ohlc_1min
                     st.code(idx, language="sql")
 
 # ============================================================================
-# MODULE 3: ETL/ELT PIPELINES - CHART HELPER FUNCTIONS  
+# MODULE 4: OLTP (Transactional Schemas) - DATABASE & DATA GENERATORS
 # ============================================================================
 
-def create_etl_overview_dashboard(conn, company_name):
-    """Create ETL overview dashboard with key metrics and visualizations"""
-    st.markdown("### 📊 ETL Pipeline Overview")
+@st.cache_resource
+def init_module4_database():
+    """Initialize Module 4 SQLite database for OLTP (Transactional Schemas)"""
+    conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+    cursor = conn.cursor()
     
-    # ETL Jobs Over Time
-    timeline_query = f"""
-    SELECT 
-        DATE(start_ts) as date,
-        COUNT(*) as jobs_count,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
-        AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END)/1000.0 as avg_duration_sec
-    FROM processing_jobs 
-    WHERE company = '{company_name}'
-    GROUP BY DATE(start_ts)
-    ORDER BY date DESC
-    LIMIT 30
-    """
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA foreign_keys = ON")
     
-    timeline_data = query_module3_data(conn, timeline_query)
-    
-    if not timeline_data.empty:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Jobs over time
-            fig1 = px.bar(timeline_data, x='date', y=['completed', 'failed'], 
-                         title=f"{company_name} ETL Jobs by Status Over Time",
-                         labels={'value': 'Number of Jobs', 'date': 'Date'})
-            st.plotly_chart(fig1, use_container_width=True)
-            
-        with col2:
-            # Average duration trend
-            fig2 = px.line(timeline_data, x='date', y='avg_duration_sec',
-                          title=f"{company_name} Average ETL Duration Trend",
-                          labels={'avg_duration_sec': 'Avg Duration (seconds)', 'date': 'Date'})
-            st.plotly_chart(fig2, use_container_width=True)
+    # Uber
+    cursor.execute("CREATE TABLE IF NOT EXISTS uber_users (user_id TEXT PRIMARY KEY, name TEXT, signup_date TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS uber_drivers (driver_id TEXT PRIMARY KEY, name TEXT, rating REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS uber_rides (ride_id TEXT PRIMARY KEY, user_id TEXT, driver_id TEXT, status TEXT, FOREIGN KEY(user_id) REFERENCES uber_users(user_id), FOREIGN KEY(driver_id) REFERENCES uber_drivers(driver_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS uber_payments (payment_id TEXT PRIMARY KEY, ride_id TEXT, amount REAL, status TEXT, FOREIGN KEY(ride_id) REFERENCES uber_rides(ride_id))")
 
-def create_etl_performance_charts(conn, company_name):
-    """Create detailed ETL performance analysis charts"""
-    st.markdown("### 📈 ETL Performance Analysis")
+    # Netflix
+    cursor.execute("CREATE TABLE IF NOT EXISTS netflix_users (user_id TEXT PRIMARY KEY, name TEXT, email TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS netflix_profiles (profile_id TEXT PRIMARY KEY, user_id TEXT, name TEXT, FOREIGN KEY(user_id) REFERENCES netflix_users(user_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS netflix_subscriptions (subscription_id TEXT PRIMARY KEY, user_id TEXT, plan TEXT, status TEXT, FOREIGN KEY(user_id) REFERENCES netflix_users(user_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS netflix_content_catalog (content_id TEXT PRIMARY KEY, title TEXT, type TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS netflix_views (view_id TEXT PRIMARY KEY, profile_id TEXT, content_id TEXT, view_date TEXT, FOREIGN KEY(profile_id) REFERENCES netflix_profiles(profile_id), FOREIGN KEY(content_id) REFERENCES netflix_content_catalog(content_id))")
+
+    # Amazon
+    cursor.execute("CREATE TABLE IF NOT EXISTS amazon_customers (customer_id TEXT PRIMARY KEY, name TEXT, join_date TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS amazon_products (product_id TEXT PRIMARY KEY, name TEXT, price REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS amazon_orders (order_id TEXT PRIMARY KEY, customer_id TEXT, order_date TEXT, status TEXT, FOREIGN KEY(customer_id) REFERENCES amazon_customers(customer_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS amazon_order_items (item_id TEXT PRIMARY KEY, order_id TEXT, product_id TEXT, quantity INTEGER, FOREIGN KEY(order_id) REFERENCES amazon_orders(order_id), FOREIGN KEY(product_id) REFERENCES amazon_products(product_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS amazon_shipments (shipment_id TEXT PRIMARY KEY, order_id TEXT, status TEXT, tracking_number TEXT, FOREIGN KEY(order_id) REFERENCES amazon_orders(order_id))")
+
+    # Airbnb
+    cursor.execute("CREATE TABLE IF NOT EXISTS airbnb_guests (guest_id TEXT PRIMARY KEY, name TEXT, member_since TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS airbnb_hosts (host_id TEXT PRIMARY KEY, name TEXT, is_superhost INTEGER)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS airbnb_properties (property_id TEXT PRIMARY KEY, host_id TEXT, title TEXT, city TEXT, FOREIGN KEY(host_id) REFERENCES airbnb_hosts(host_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS airbnb_bookings (booking_id TEXT PRIMARY KEY, guest_id TEXT, property_id TEXT, checkin_date TEXT, checkout_date TEXT, FOREIGN KEY(guest_id) REFERENCES airbnb_guests(guest_id), FOREIGN KEY(property_id) REFERENCES airbnb_properties(property_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS airbnb_reviews (review_id TEXT PRIMARY KEY, booking_id TEXT, rating INTEGER, comment TEXT, FOREIGN KEY(booking_id) REFERENCES airbnb_bookings(booking_id))")
+
+    # NYSE
+    cursor.execute("CREATE TABLE IF NOT EXISTS nyse_accounts (account_id TEXT PRIMARY KEY, name TEXT, balance REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS nyse_orders (order_id TEXT PRIMARY KEY, account_id TEXT, ticker TEXT, type TEXT, quantity INTEGER, price REAL, status TEXT, FOREIGN KEY(account_id) REFERENCES nyse_accounts(account_id))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS nyse_transactions (transaction_id TEXT PRIMARY KEY, order_id TEXT, transaction_time TEXT, FOREIGN KEY(order_id) REFERENCES nyse_orders(order_id))")
+
+    conn.commit()
+    return conn
+
+@st.cache_resource
+def init_module5_database():
+    conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+    cursor = conn.cursor()
     
-    # Performance by job type and engine
-    performance_query = f"""
-    SELECT 
-        job_type,
-        engine,
-        COUNT(*) as job_count,
-        AVG(duration_ms)/1000.0 as avg_duration_sec,
-        AVG(records_in) as avg_records_in,
-        AVG(records_out) as avg_records_out,
-        AVG(data_quality_score) as avg_quality_score
-    FROM processing_jobs 
-    WHERE company = '{company_name}' AND status = 'completed'
-    GROUP BY job_type, engine
-    """
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA foreign_keys = ON")
     
-    perf_data = query_module3_data(conn, performance_query)
+    # Create aggregate tables for each company
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agg_uber_daily_revenue (
+            date TEXT,
+            city TEXT,
+            total_rides INTEGER,
+            completed_rides INTEGER,
+            gross_revenue_aed REAL,
+            avg_fare_aed REAL,
+            cancellation_rate REAL,
+            PRIMARY KEY (date, city)
+        )
+    """)
     
-    if not perf_data.empty:
-        col1, col2 = st.columns(2)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agg_netflix_hourly_engagement (
+            date_hour TEXT PRIMARY KEY,
+            content_id TEXT,
+            views INTEGER,
+            unique_viewers INTEGER,
+            avg_watch_sec REAL
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agg_amazon_daily_sales (
+            date TEXT PRIMARY KEY,
+            category TEXT,
+            orders INTEGER,
+            units_sold INTEGER,
+            gross_revenue_aed REAL,
+            returns INTEGER
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agg_airbnb_occupancy (
+            date TEXT PRIMARY KEY,
+            city TEXT,
+            occupied_nights INTEGER,
+            available_nights INTEGER,
+            occupancy_rate REAL,
+            revenue_aed REAL
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agg_nyse_minute_ohlc (
+            ticker TEXT,
+            minute_ts TEXT PRIMARY KEY,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume INTEGER
+        )
+    """)
+    
+    conn.commit()
+    return conn
+
+def populate_module4_data(conn, company_name):
+    """Populate Module 4 database with synthetic OLTP data"""
+    cursor = conn.cursor()
+
+    # Check if data already exists for this company
+    # For OLTP, we check a representative table like users
+    table_map = {
+        'Uber': 'uber_users',
+        'Netflix': 'netflix_users',
+        'Amazon': 'amazon_customers',
+        'Airbnb': 'airbnb_guests',
+        'NYSE': 'nyse_accounts'
+    }
+    
+    table_name = table_map[company_name]
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    count = cursor.fetchone()[0]
+    
+    if count > 0:
+        return  # Data already exists for this company
+
+    try:
+        cursor.execute("BEGIN")
         
-        with col1:
-            # Duration by engine
-            fig1 = px.box(perf_data, x='engine', y='avg_duration_sec',
-                         title=f"{company_name} ETL Duration by Engine",
-                         labels={'avg_duration_sec': 'Avg Duration (seconds)'})
-            st.plotly_chart(fig1, use_container_width=True)
+        if company_name == "Uber":
+            users = generate_uber_oltp_users(100)
+            drivers = generate_uber_oltp_drivers(50)
+            rides = generate_uber_oltp_rides(200, users['user_id'].tolist(), drivers['driver_id'].tolist())
+            payments = generate_uber_oltp_payments(200, rides['ride_id'].tolist())
             
-        with col2:
-            # Data quality by job type
-            fig2 = px.scatter(perf_data, x='avg_records_in', y='avg_quality_score',
-                             size='job_count', color='job_type',
-                             title=f"{company_name} Data Quality vs Volume",
-                             labels={'avg_records_in': 'Avg Records In', 'avg_quality_score': 'Avg Quality Score'})
-            st.plotly_chart(fig2, use_container_width=True)
+            users.to_sql('uber_users', conn, if_exists='append', index=False)
+            drivers.to_sql('uber_drivers', conn, if_exists='append', index=False)
+            rides.to_sql('uber_rides', conn, if_exists='append', index=False)
+            payments.to_sql('uber_payments', conn, if_exists='append', index=False)
+            
+        elif company_name == "Netflix":
+            users = generate_netflix_oltp_users(100)
+            profiles = generate_netflix_oltp_profiles(150, users['user_id'].tolist())
+            subscriptions = generate_netflix_oltp_subscriptions(100, users['user_id'].tolist())
+            content = generate_netflix_oltp_content(50)
+            views = generate_netflix_oltp_views(500, profiles['profile_id'].tolist(), content['content_id'].tolist())
+            
+            users.to_sql('netflix_users', conn, if_exists='append', index=False)
+            profiles.to_sql('netflix_profiles', conn, if_exists='append', index=False)
+            subscriptions.to_sql('netflix_subscriptions', conn, if_exists='append', index=False)
+            content.to_sql('netflix_content_catalog', conn, if_exists='append', index=False)
+            views.to_sql('netflix_views', conn, if_exists='append', index=False)
+
+        elif company_name == "Amazon":
+            customers = generate_amazon_oltp_customers(100)
+            products = generate_amazon_oltp_products(50)
+            orders = generate_amazon_oltp_orders(200, customers['customer_id'].tolist())
+            order_items = generate_amazon_oltp_order_items(300, orders['order_id'].tolist(), products['product_id'].tolist())
+            shipments = generate_amazon_oltp_shipments(200, orders['order_id'].tolist())
+
+            customers.to_sql('amazon_customers', conn, if_exists='append', index=False)
+            products.to_sql('amazon_products', conn, if_exists='append', index=False)
+            orders.to_sql('amazon_orders', conn, if_exists='append', index=False)
+            order_items.to_sql('amazon_order_items', conn, if_exists='append', index=False)
+            shipments.to_sql('amazon_shipments', conn, if_exists='append', index=False)
+
+        elif company_name == "Airbnb":
+            guests = generate_airbnb_oltp_guests(100)
+            hosts = generate_airbnb_oltp_hosts(50)
+            properties = generate_airbnb_oltp_properties(100, hosts['host_id'].tolist())
+            bookings = generate_airbnb_oltp_bookings(200, guests['guest_id'].tolist(), properties['property_id'].tolist())
+            reviews = generate_airbnb_oltp_reviews(150, bookings['booking_id'].tolist())
+
+            guests.to_sql('airbnb_guests', conn, if_exists='append', index=False)
+            hosts.to_sql('airbnb_hosts', conn, if_exists='append', index=False)
+            properties.to_sql('airbnb_properties', conn, if_exists='append', index=False)
+            bookings.to_sql('airbnb_bookings', conn, if_exists='append', index=False)
+            reviews.to_sql('airbnb_reviews', conn, if_exists='append', index=False)
+
+        elif company_name == "NYSE":
+            accounts = generate_nyse_oltp_accounts(100)
+            orders = generate_nyse_oltp_orders(300, accounts['account_id'].tolist())
+            transactions = generate_nyse_oltp_transactions(300, orders['order_id'].tolist())
+
+            accounts.to_sql('nyse_accounts', conn, if_exists='append', index=False)
+            orders.to_sql('nyse_orders', conn, if_exists='append', index=False)
+            transactions.to_sql('nyse_transactions', conn, if_exists='append', index=False)
+            
+        conn.commit()
+        st.success(f"✅ Populated {company_name} OLTP data.")
         
-        # Resource utilization
-        resource_query = f"""
-        SELECT 
-            resource_cpu_cores,
-            resource_memory_gb,
-            AVG(duration_ms)/1000.0 as avg_duration_sec,
-            COUNT(*) as job_count
-        FROM processing_jobs 
-        WHERE company = '{company_name}' AND status = 'completed'
-        GROUP BY resource_cpu_cores, resource_memory_gb
-        """
-        
-        resource_data = query_module3_data(conn, resource_query)
-        
-        if not resource_data.empty:
-            fig3 = px.scatter(resource_data, x='resource_cpu_cores', y='resource_memory_gb',
-                             size='job_count', color='avg_duration_sec',
-                             title=f"{company_name} Resource Utilization vs Performance",
-                             labels={'resource_cpu_cores': 'CPU Cores', 'resource_memory_gb': 'Memory (GB)'})
-            st.plotly_chart(fig3, use_container_width=True)
+    except Exception as e:
+        try:
+            conn.rollback()
+        except:
+            pass
+        st.error(f"Error populating Module 4 data for {company_name}: {str(e)}")
+        import traceback
+        st.error(f"Full error: {traceback.format_exc()}")
+        raise e
+
+# ============================================================================
+# MODULE 4: OLTP - SYNTHETIC DATA GENERATORS
+# ============================================================================
+
+@st.cache_data
+def generate_uber_oltp_users(n_records=100):
+    np.random.seed(48)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'user_id': f'usr_{i:05d}',
+            'name': f'Rider {i}',
+            'signup_date': (datetime.now() - timedelta(days=np.random.randint(1, 730))).strftime('%Y-%m-%d')
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_uber_oltp_drivers(n_records=50):
+    np.random.seed(48)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'driver_id': f'drv_{i:04d}',
+            'name': f'Driver {i}',
+            'rating': round(np.random.uniform(4.0, 5.0), 2)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_uber_oltp_rides(n_records=200, user_ids=None, driver_ids=None):
+    np.random.seed(48)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'ride_id': f'ride_{i:06d}',
+            'user_id': np.random.choice(user_ids) if user_ids else f'usr_{np.random.randint(0, 100):05d}',
+            'driver_id': np.random.choice(driver_ids) if driver_ids else f'drv_{np.random.randint(0, 50):04d}',
+            'status': np.random.choice(['completed', 'cancelled', 'ongoing'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_uber_oltp_payments(n_records=200, ride_ids=None):
+    np.random.seed(48)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'payment_id': f'pay_{i:06d}',
+            'ride_id': np.random.choice(ride_ids) if ride_ids else f'ride_{np.random.randint(0, 200):06d}',
+            'amount': round(np.random.uniform(10, 100), 2),
+            'status': np.random.choice(['paid', 'pending', 'failed'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_oltp_users(n_records=100):
+    np.random.seed(49)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'user_id': f'nf_usr_{i:06d}',
+            'name': f'Netflix User {i}',
+            'email': f'user{i}@example.com'
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_oltp_profiles(n_records=150, user_ids=None):
+    np.random.seed(49)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'profile_id': f'prof_{i:06d}',
+            'user_id': np.random.choice(user_ids) if user_ids else f'nf_usr_{np.random.randint(0, 100):06d}',
+            'name': np.random.choice(['Kids', 'Adult', 'Guest'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_oltp_subscriptions(n_records=100, user_ids=None):
+    np.random.seed(49)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'subscription_id': f'sub_{i:06d}',
+            'user_id': np.random.choice(user_ids) if user_ids else f'nf_usr_{np.random.randint(0, 100):06d}',
+            'plan': np.random.choice(['Basic', 'Standard', 'Premium']),
+            'status': np.random.choice(['active', 'cancelled'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_oltp_content(n_records=50):
+    np.random.seed(49)
+    data = []
+    titles = ['Stranger Things', 'The Crown', 'Squid Game', 'Ozark', 'Dark', 'Money Heist', 'The Witcher']
+    for i in range(n_records):
+        data.append({
+            'content_id': f'cnt_{i:03d}',
+            'title': np.random.choice(titles),
+            'type': np.random.choice(['Movie', 'Series'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_netflix_oltp_views(n_records=500, profile_ids=None, content_ids=None):
+    np.random.seed(49)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'view_id': f'view_{i:06d}',
+            'profile_id': np.random.choice(profile_ids) if profile_ids else f'prof_{np.random.randint(0, 150):06d}',
+            'content_id': np.random.choice(content_ids) if content_ids else f'cnt_{np.random.randint(0, 50):03d}',
+            'view_date': (datetime.now() - timedelta(days=np.random.randint(1, 365))).strftime('%Y-%m-%d')
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_oltp_customers(n_records=100):
+    np.random.seed(50)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'customer_id': f'cust_{i:06d}',
+            'name': f'Amazon Customer {i}',
+            'join_date': (datetime.now() - timedelta(days=np.random.randint(1, 1000))).strftime('%Y-%m-%d')
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_oltp_products(n_records=50):
+    np.random.seed(50)
+    data = []
+    categories = ['Electronics', 'Books', 'Clothing', 'Home']
+    for i in range(n_records):
+        data.append({
+            'product_id': f'prod_{i:06d}',
+            'name': f'Product {i}',
+            'price': round(np.random.uniform(10, 500), 2),
+            'category': np.random.choice(categories)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_oltp_orders(n_records=200, customer_ids=None):
+    np.random.seed(50)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'order_id': f'order_{i:08d}',
+            'customer_id': np.random.choice(customer_ids) if customer_ids else f'cust_{np.random.randint(0, 100):06d}',
+            'order_date': (datetime.now() - timedelta(days=np.random.randint(1, 365))).strftime('%Y-%m-%d'),
+            'status': np.random.choice(['pending', 'shipped', 'delivered', 'cancelled'])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_oltp_order_items(n_records=300, order_ids=None, product_ids=None):
+    np.random.seed(50)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'item_id': f'item_{i:08d}',
+            'order_id': np.random.choice(order_ids) if order_ids else f'order_{np.random.randint(0, 200):08d}',
+            'product_id': np.random.choice(product_ids) if product_ids else f'prod_{np.random.randint(0, 50):06d}',
+            'quantity': np.random.randint(1, 5)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_amazon_oltp_shipments(n_records=200, order_ids=None):
+    np.random.seed(50)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'shipment_id': f'ship_{i:08d}',
+            'order_id': np.random.choice(order_ids) if order_ids else f'order_{np.random.randint(0, 200):08d}',
+            'status': np.random.choice(['processing', 'shipped', 'delivered']),
+            'tracking_number': f'TRK{np.random.randint(100000000, 999999999)}'
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_oltp_guests(n_records=100):
+    np.random.seed(51)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'guest_id': f'guest_{i:06d}',
+            'name': f'Airbnb Guest {i}',
+            'member_since': (datetime.now() - timedelta(days=np.random.randint(1, 730))).strftime('%Y-%m-%d')
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_oltp_hosts(n_records=50):
+    np.random.seed(51)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'host_id': f'host_{i:05d}',
+            'name': f'Airbnb Host {i}',
+            'is_superhost': np.random.choice([0, 1], p=[0.7, 0.3])
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_oltp_properties(n_records=100, host_ids=None):
+    np.random.seed(51)
+    data = []
+    cities = ['Dubai', 'Abu Dhabi', 'Sharjah', 'London', 'Paris']
+    for i in range(n_records):
+        data.append({
+            'property_id': f'prop_{i:06d}',
+            'host_id': np.random.choice(host_ids) if host_ids else f'host_{np.random.randint(0, 50):05d}',
+            'title': f'Cozy Apartment {i}',
+            'city': np.random.choice(cities)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_oltp_bookings(n_records=200, guest_ids=None, property_ids=None):
+    np.random.seed(51)
+    data = []
+    for i in range(n_records):
+        checkin = datetime.now() + timedelta(days=np.random.randint(-30, 90))
+        checkout = checkin + timedelta(days=np.random.randint(1, 10))
+        data.append({
+            'booking_id': f'book_{i:08d}',
+            'guest_id': np.random.choice(guest_ids) if guest_ids else f'guest_{np.random.randint(0, 100):06d}',
+            'property_id': np.random.choice(property_ids) if property_ids else f'prop_{np.random.randint(0, 100):06d}',
+            'checkin_date': checkin.strftime('%Y-%m-%d'),
+            'checkout_date': checkout.strftime('%Y-%m-%d')
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_airbnb_oltp_reviews(n_records=150, booking_ids=None):
+    np.random.seed(51)
+    data = []
+    comments = ['Great stay!', 'Clean and comfortable.', 'Highly recommend.', 'Good location.', 'Needs improvement.']
+    for i in range(n_records):
+        data.append({
+            'review_id': f'rev_{i:08d}',
+            'booking_id': np.random.choice(booking_ids) if booking_ids else f'book_{np.random.randint(0, 200):08d}',
+            'rating': np.random.randint(3, 6),
+            'comment': np.random.choice(comments)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_oltp_accounts(n_records=100):
+    np.random.seed(52)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'account_id': f'acc_{i:06d}',
+            'name': f'Trader {i}',
+            'balance': round(np.random.uniform(10000, 1000000), 2)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_oltp_orders(n_records=300, account_ids=None):
+    np.random.seed(52)
+    data = []
+    tickers = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
+    order_types = ['BUY', 'SELL']
+    statuses = ['FILLED', 'PARTIAL', 'OPEN', 'CANCELLED']
+    for i in range(n_records):
+        data.append({
+            'order_id': f'ord_{i:08d}',
+            'account_id': np.random.choice(account_ids) if account_ids else f'acc_{np.random.randint(0, 100):06d}',
+            'ticker': np.random.choice(tickers),
+            'type': np.random.choice(order_types),
+            'quantity': np.random.randint(10, 1000),
+            'price': round(np.random.uniform(100, 500), 2),
+            'status': np.random.choice(statuses)
+        })
+    return pd.DataFrame(data)
+
+@st.cache_data
+def generate_nyse_oltp_transactions(n_records=300, order_ids=None):
+    np.random.seed(52)
+    data = []
+    for i in range(n_records):
+        data.append({
+            'transaction_id': f'txn_{i:08d}',
+            'order_id': np.random.choice(order_ids) if order_ids else f'ord_{np.random.randint(0, 300):08d}',
+            'transaction_time': (datetime.now() - timedelta(seconds=np.random.randint(1, 3600))).strftime('%Y-%m-%d %H:%M:%S')
+        })
+    return pd.DataFrame(data)
 
 def show_processing_systems():
     st.header("⚡ Processing Systems")
     st.markdown("Learn about batch and stream processing frameworks")
     
-    tab1, tab2, tab3 = st.tabs(["📚 Batch vs Stream", "🛠️ Framework Comparison", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📚 Batch vs Stream", "🛠️ Framework Comparison", "🏢 Real Examples", "📚 Schema Info"])
     
     with tab1:
-        st.subheader("Batch vs Stream Processing")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("""
-            ### 📦 Batch Processing
-            **Process data in large chunks**
-            
-            **Characteristics:**
-            - Process data at scheduled intervals
-            - High throughput, higher latency
-            - Cost-effective for large datasets
-            - Fault-tolerant and reliable
-            
-            **Use Cases:**
-            - Daily reports and analytics
-            - Historical data processing
-            - Machine learning training
-            - Data warehouse ETL
-            
-            **Tools:** Hadoop MapReduce, Apache Spark, AWS EMR
-            """)
-            
-            # Batch processing simulation
-            st.markdown("#### 📊 Batch Processing Simulation")
-            batch_interval = st.selectbox("Batch Interval:", ["Every hour", "Every day", "Every week"])
-            data_size = st.slider("Data Size (GB):", 1, 1000, 100)
-            
-            if st.button("Simulate Batch Job"):
-                processing_time = data_size * 0.1  # Simulate processing time
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                import time
-                for i in range(101):
-                    progress_bar.progress(i)
-                    status_text.text(f'Processing batch job... {i}% complete')
-                    time.sleep(0.02)
-                
-                st.success(f"✅ Batch job completed! Processed {data_size}GB in {processing_time:.1f} minutes")
-                
-                # Show batch metrics
-                metrics_data = pd.DataFrame({
-                    'Time': pd.date_range('00:00', periods=24, freq='1H'),
-                    'Data_Processed_GB': np.random.randint(50, 200, 24)
-                })
-                fig = px.bar(metrics_data, x='Time', y='Data_Processed_GB', 
-                           title='Hourly Batch Processing Volume')
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.markdown("""
-            ### ⚡ Stream Processing
-            **Process data in real-time**
-            
-            **Characteristics:**
-            - Process data as it arrives
-            - Low latency, continuous processing
-            - Real-time insights and actions
-            - More complex error handling
-            
-            **Use Cases:**
-            - Real-time alerts and monitoring
-            - Live dashboards
-            - Fraud detection
-            - Dynamic pricing
-            
-            **Tools:** Apache Kafka, Apache Flink, Spark Streaming
-            """)
-            
-            # Stream processing simulation
-            st.markdown("#### 📊 Stream Processing Simulation")
-            stream_rate = st.selectbox("Stream Rate:", ["100 events/sec", "1K events/sec", "10K events/sec"])
-            
-            if st.button("Start Stream Processing"):
-                st.markdown("**Live Event Stream:**")
-                placeholder = st.empty()
-                
-                for i in range(15):
-                    event = {
-                        'timestamp': datetime.now().strftime('%H:%M:%S.%f')[:-3],
-                        'event_id': f"evt_{np.random.randint(10000, 99999)}",
-                        'user_id': np.random.randint(1000, 9999),
-                        'action': np.random.choice(['purchase', 'view', 'click', 'scroll']),
-                        'value': round(np.random.uniform(1, 1000), 2)
-                    }
-                    
-                    with placeholder.container():
-                        st.json(event)
-                    time.sleep(0.3)
-                
-                st.info("Stream processing completed - In production, this runs continuously!")
+        st.subheader("📊 EDA Charts - Processing Systems")
+        st.markdown("Visualize key metrics and distributions of ETL job executions.")
+
+        module3_conn = init_module3_database()
+        jobs_data = pd.read_sql_query("SELECT * FROM processing_jobs", module3_conn)
+
+        if not jobs_data.empty:
+            # 1. Job Status Distribution
+            st.markdown("### Job Status Distribution")
+            status_counts = jobs_data['status'].value_counts()
+            fig_status = px.pie(status_counts, values=status_counts.values, names=status_counts.index,
+                                title='ETL Job Status')
+            st.plotly_chart(fig_status, use_container_width=True)
+
+            # 2. Job Duration Distribution
+            st.markdown("### Job Duration Distribution (ms)")
+            fig_duration = px.histogram(jobs_data, x='duration_ms', nbins=50,
+                                        title='Distribution of Job Durations')
+            st.plotly_chart(fig_duration, use_container_width=True)
+
+            # 3. Records Processed (In vs Out)
+            st.markdown("### Records Processed (Input vs Output)")
+            records_df = pd.DataFrame({
+                'Metric': ['Records In', 'Records Out'],
+                'Count': [jobs_data['records_in'].sum(), jobs_data['records_out'].sum()]
+            })
+            fig_records = px.bar(records_df, x='Metric', y='Count',
+                                 title='Total Records Processed')
+            st.plotly_chart(fig_records, use_container_width=True)
+
+            # 4. Data Quality Score Distribution
+            st.markdown("### Data Quality Score Distribution")
+            fig_dq = px.histogram(jobs_data.dropna(subset=['data_quality_score']), x='data_quality_score', nbins=20,
+                                  title='Distribution of Data Quality Scores')
+            st.plotly_chart(fig_dq, use_container_width=True)
+
+        else:
+            st.info("No processing jobs data available to display charts.")
+
+    with tab4:
+        st.subheader("📚 Schema Info - Processing Systems")
+        st.markdown("Explore the database schemas for processing jobs and manifests.")
+
+        # Initialize Module 3 database connection
+        module3_conn = init_module3_database()
+
+        def get_table_schema(conn, table_name):
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            schema_info = cursor.fetchall()
+            schema_df = pd.DataFrame(schema_info, columns=['cid', 'name', 'type', 'notnull', 'dflt_value', 'pk'])
+            return schema_df[['name', 'type', 'notnull', 'pk']]
+
+        st.markdown("### `processing_jobs` Table Schema")
+        processing_jobs_schema = get_table_schema(module3_conn, 'processing_jobs')
+        st.dataframe(processing_jobs_schema, use_container_width=True)
+
+        st.markdown("### `etl_manifests` Table Schema")
+        etl_manifests_schema = get_table_schema(module3_conn, 'etl_manifests')
+        st.dataframe(etl_manifests_schema, use_container_width=True)
         
         # Comparison table
         st.markdown("---")
@@ -6969,223 +7341,85 @@ def show_processing_systems():
         st.table(comparison_data)
     
     with tab2:
-        st.subheader("🛠️ Processing Framework Comparison")
-        
-        framework_type = st.selectbox("Choose framework type:", ["Batch Frameworks", "Stream Frameworks", "Hybrid Frameworks"])
-        
-        if framework_type == "Batch Frameworks":
-            frameworks = {
-                "Apache Spark": {
-                    "icon": "⚡",
-                    "description": "Unified analytics engine for large-scale data processing",
-                    "pros": ["Fast in-memory processing", "Supports multiple languages", "Rich ecosystem"],
-                    "cons": ["Memory intensive", "Steep learning curve"],
-                    "best_for": "Large-scale ETL, machine learning, interactive analytics"
-                },
-                "Hadoop MapReduce": {
-                    "icon": "🐘", 
-                    "description": "Original big data processing framework",
-                    "pros": ["Highly fault-tolerant", "Handles very large datasets", "Battle-tested"],
-                    "cons": ["Slow (disk-based)", "Complex programming model"],
-                    "best_for": "Massive batch jobs, cost-sensitive processing"
-                },
-                "AWS EMR": {
-                    "icon": "☁️",
-                    "description": "Managed cluster platform for big data frameworks",
-                    "pros": ["Fully managed", "Auto-scaling", "Multiple framework support"],
-                    "cons": ["AWS lock-in", "Cost can be high"],
-                    "best_for": "Cloud-native batch processing, temporary clusters"
-                }
-            }
-            
-        elif framework_type == "Stream Frameworks":
-            frameworks = {
-                "Apache Kafka": {
-                    "icon": "🌊",
-                    "description": "Distributed streaming platform and message broker",
-                    "pros": ["High throughput", "Durable", "Real-time processing"],
-                    "cons": ["Complex setup", "Operational overhead"],
-                    "best_for": "Event streaming, real-time data pipelines"
-                },
-                "Apache Flink": {
-                    "icon": "🏃",
-                    "description": "Stream processing framework with low latency",
-                    "pros": ["True streaming", "Low latency", "Event-time processing"],
-                    "cons": ["Smaller community", "Memory management complexity"],
-                    "best_for": "Ultra-low latency, complex event processing"
-                },
-                "Spark Streaming": {
-                    "icon": "⚡",
-                    "description": "Micro-batch stream processing on Spark",
-                    "pros": ["Unified batch/stream API", "Rich ecosystem", "Fault-tolerant"],
-                    "cons": ["Higher latency than true streaming", "Memory requirements"],
-                    "best_for": "Near real-time processing, mixed workloads"
-                }
-            }
-        
-        else:  # Hybrid Frameworks
-            frameworks = {
-                "Apache Beam": {
-                    "icon": "🌉",
-                    "description": "Unified programming model for batch and stream",
-                    "pros": ["Single API", "Multiple runners", "Portable"],
-                    "cons": ["Abstraction overhead", "Runner-specific optimizations"],
-                    "best_for": "Unified batch/stream pipelines, multi-cloud"
-                },
-                "Databricks": {
-                    "icon": "🧱",
-                    "description": "Unified analytics platform built on Spark",
-                    "pros": ["Collaborative notebooks", "Auto-scaling", "Delta Lake integration"],
-                    "cons": ["Vendor lock-in", "Cost", "Complex pricing"],
-                    "best_for": "Data science workflows, collaborative analytics"
-                }
-            }
-        
-        for framework, details in frameworks.items():
-            with st.expander(f"{details['icon']} {framework}"):
-                st.markdown(f"**Description:** {details['description']}")
-                st.markdown(f"**Best for:** {details['best_for']}")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**✅ Pros:**")
-                    for pro in details['pros']:
-                        st.markdown(f"• {pro}")
-                with col2:
-                    st.markdown("**❌ Cons:**")
-                    for con in details['cons']:
-                        st.markdown(f"• {con}")
-        
-        # Framework selector tool
-        st.markdown("---")
-        st.subheader("🎯 Which Framework Should You Choose?")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            latency_req = st.selectbox("Latency Requirement:", 
-                ["Sub-second", "Few seconds", "Minutes", "Hours"])
-            data_volume = st.selectbox("Data Volume:", 
-                ["Small (GB)", "Medium (TB)", "Large (PB)"])
-        with col2:
-            use_case = st.selectbox("Primary Use Case:", 
-                ["Real-time alerts", "Analytics", "ETL", "ML Training"])
-            cloud_pref = st.selectbox("Cloud Preference:", 
-                ["AWS", "Azure", "GCP", "Multi-cloud", "On-premise"])
-        
-        if st.button("Get Framework Recommendation"):
-            if latency_req == "Sub-second":
-                st.success("🏃 **Recommendation: Apache Flink** - Best for ultra-low latency streaming")
-            elif use_case == "Real-time alerts":
-                st.success("🌊 **Recommendation: Apache Kafka + Kafka Streams** - Perfect for real-time event processing")
-            elif data_volume == "Large (PB)" and latency_req == "Hours":
-                st.success("🐘 **Recommendation: Hadoop MapReduce** - Cost-effective for massive batch jobs")
-            elif use_case == "ML Training":
-                st.success("⚡ **Recommendation: Apache Spark** - Excellent for large-scale ML workloads")
-            else:
-                st.success("⚡ **Recommendation: Apache Spark** - Versatile choice for most use cases")
+        st.subheader("🛠️ Interactive Demo - Processing Systems")
+        st.markdown("Simulate ETL job execution and observe status changes.")
+
+        module3_conn = init_module3_database()
+
+        company_options = ["Uber", "Netflix", "Amazon", "Airbnb", "NYSE"]
+        selected_company = st.selectbox("Select Company for Simulation:", company_options, key="proc_sim_company")
+
+        # Fetch jobs for the selected company
+        jobs_query = f"SELECT job_id, job_name, job_type, engine, status, duration_ms, start_ts FROM processing_jobs WHERE company = '{selected_company}' ORDER BY start_ts DESC LIMIT 10"
+        recent_jobs = pd.read_sql_query(jobs_query, module3_conn)
+
+        if not recent_jobs.empty:
+            st.markdown("### Recent Processing Jobs")
+            st.dataframe(recent_jobs, use_container_width=True)
+
+            st.markdown("### Simulate Job Run")
+            job_to_simulate = st.selectbox("Choose a job to simulate:", recent_jobs['job_id'].tolist())
+            simulate_status = st.selectbox("Simulate as:", ["completed", "failed", "running", "cancelled"])
+
+            if st.button("🚀 Run Simulation"):
+                # Conceptual simulation: update job status in UI (not in DB)
+                simulated_job_df = recent_jobs[recent_jobs['job_id'] == job_to_simulate].copy()
+                if not simulated_job_df.empty:
+                    simulated_job_df.loc[:, 'status'] = simulate_status
+                    st.success(f"Simulated job {job_to_simulate} as '{simulate_status}'.")
+                    st.dataframe(simulated_job_df, use_container_width=True)
+
+                    if simulate_status == "completed":
+                        st.metric("Simulated Records In", f"{simulated_job_df['records_in'].iloc[0]:,}")
+                        st.metric("Simulated Records Out", f"{simulated_job_df['records_out'].iloc[0]:,}")
+                        st.metric("Simulated Duration (ms)", f"{simulated_job_df['duration_ms'].iloc[0]:,}")
+                    elif simulate_status == "failed":
+                        st.error("Simulated job failed. Check error logs.")
+                else:
+                    st.warning("Job not found in recent list.")
+        else:
+            st.info(f"No processing jobs found for {selected_company} to simulate.")
     
     with tab3:
         st.subheader("🏢 Real-World Processing Examples")
-        
-        processing_examples = {
-            "Uber": {
-                "icon": "🚗",
-                "batch": {
-                    "use_case": "Daily driver analytics, trip summaries",
-                    "framework": "Spark on Hadoop",
-                    "frequency": "Daily batch jobs",
-                    "data_size": "Terabytes per day"
-                },
-                "stream": {
-                    "use_case": "Real-time surge pricing, ETA calculation",
-                    "framework": "Apache Flink",
-                    "latency": "Sub-second",
-                    "throughput": "Millions of events/second"
-                }
-            },
-            "Netflix": {
-                "icon": "🎬",
-                "batch": {
-                    "use_case": "Recommendation model training",
-                    "framework": "Spark + TensorFlow",
-                    "frequency": "Multiple times per day",
-                    "data_size": "Petabytes of viewing data"
-                },
-                "stream": {
-                    "use_case": "Real-time content personalization",
-                    "framework": "Kafka + Flink",
-                    "latency": "Milliseconds", 
-                    "throughput": "Billions of events/day"
-                }
-            },
-            "Amazon": {
-                "icon": "🛒",
-                "batch": {
-                    "use_case": "Daily sales reports, inventory optimization",
-                    "framework": "EMR with Spark",
-                    "frequency": "Hourly and daily",
-                    "data_size": "Multi-petabyte data lake"
-                },
-                "stream": {
-                    "use_case": "Real-time recommendation updates",
-                    "framework": "Kinesis + Lambda",
-                    "latency": "Few seconds",
-                    "throughput": "Millions of events/second"
-                }
-            }
-        }
-        
-        for company, examples in processing_examples.items():
-            with st.expander(f"{examples['icon']} {company} Processing Architecture"):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("### 📦 Batch Processing")
-                    st.markdown(f"**Use Case:** {examples['batch']['use_case']}")
-                    st.markdown(f"**Framework:** {examples['batch']['framework']}")
-                    st.markdown(f"**Frequency:** {examples['batch']['frequency']}")
-                    st.markdown(f"**Data Size:** {examples['batch']['data_size']}")
-                    
-                with col2:
-                    st.markdown("### ⚡ Stream Processing")
-                    st.markdown(f"**Use Case:** {examples['stream']['use_case']}")
-                    st.markdown(f"**Framework:** {examples['stream']['framework']}")
-                    st.markdown(f"**Latency:** {examples['stream']['latency']}")
-                    st.markdown(f"**Throughput:** {examples['stream']['throughput']}")
-        
-        # Processing architecture patterns
-        st.markdown("---")
-        st.markdown("### 🏗️ Common Architecture Patterns")
-        
-        patterns = {
-            "Lambda Architecture": {
-                "description": "Batch + Stream layers with serving layer",
-                "components": ["Batch Layer (Hadoop/Spark)", "Speed Layer (Storm/Flink)", "Serving Layer (HBase/Cassandra)"],
-                "pros": "Fault-tolerant, handles both batch and real-time",
-                "cons": "Complex, duplicate logic in batch/stream layers"
-            },
-            "Kappa Architecture": {
-                "description": "Stream-only processing with replayable logs",
-                "components": ["Stream Processing (Kafka/Flink)", "Replayable Log (Kafka)", "Serving Layer"],
-                "pros": "Simpler, single codebase, easier to maintain",
-                "cons": "All processing must be streamable"
-            }
-        }
-        
-        for pattern, details in patterns.items():
-            with st.expander(f"🏗️ {pattern}"):
-                st.markdown(f"**Description:** {details['description']}")
-                st.markdown("**Components:**")
-                for component in details['components']:
-                    st.markdown(f"• {component}")
-                st.markdown(f"**✅ Pros:** {details['pros']}")
-                st.markdown(f"**❌ Cons:** {details['cons']}")
+        st.markdown("Analyze real-world examples of batch and stream processing jobs from the database.")
+
+        module3_conn = init_module3_database()
+        jobs_data = pd.read_sql_query("SELECT * FROM processing_jobs", module3_conn)
+
+        if not jobs_data.empty:
+            batch_jobs = jobs_data[jobs_data['job_type'] == 'batch']
+            stream_jobs = jobs_data[jobs_data['job_type'] == 'stream']
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 📦 Batch Processing Examples")
+                if not batch_jobs.empty:
+                    st.metric("Total Batch Jobs", len(batch_jobs))
+                    st.metric("Avg Batch Duration (ms)", f"{batch_jobs['duration_ms'].mean():.0f}")
+                    st.markdown("#### Sample Batch Jobs")
+                    st.dataframe(batch_jobs[['job_name', 'engine', 'status', 'duration_ms', 'records_in']].head(5), use_container_width=True)
+                else:
+                    st.info("No batch jobs found.")
+
+            with col2:
+                st.markdown("### ⚡ Stream Processing Examples")
+                if not stream_jobs.empty:
+                    st.metric("Total Stream Jobs", len(stream_jobs))
+                    st.metric("Avg Stream Duration (ms)", f"{stream_jobs['duration_ms'].mean():.0f}")
+                    st.markdown("#### Sample Stream Jobs")
+                    st.dataframe(stream_jobs[['job_name', 'engine', 'status', 'duration_ms', 'records_in']].head(5), use_container_width=True)
+                else:
+                    st.info("No stream jobs found.")
+        else:
+            st.info("No processing jobs data available to display real examples.")
 
 def show_big_data_scaling():
     st.header("📊 Big Data & Scaling")
     st.markdown("Understanding the 3 Vs of Big Data and scaling challenges")
     
-    tab1, tab2, tab3 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples", "📚 Schema Info"])
     
     with tab1:
         st.subheader("The 3 Vs of Big Data")
@@ -7371,6 +7605,36 @@ def show_big_data_scaling():
                 
                 for challenge in challenges:
                     st.markdown(f"• {challenge}")
+
+    with tab4:
+        st.subheader("📚 Schema Info - Big Data & Scaling")
+        st.markdown("Explore example schemas for large-scale datasets.")
+
+        # Initialize in-memory company database
+        company_conn = create_company_database()
+
+        def get_table_schema(conn, table_name):
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            schema_info = cursor.fetchall()
+            schema_df = pd.DataFrame(schema_info, columns=['cid', 'name', 'type', 'notnull', 'dflt_value', 'pk'])
+            return schema_df[['name', 'type', 'notnull', 'pk']]
+
+        st.markdown("### `netflix_viewership` Table Schema (Example of Streaming Data)")
+        netflix_schema = get_table_schema(company_conn, 'netflix_viewership')
+        st.dataframe(netflix_schema, use_container_width=True)
+
+        st.markdown("### `amazon_sales` Table Schema (Example of E-commerce Data)")
+        amazon_schema = get_table_schema(company_conn, 'amazon_sales')
+        st.dataframe(amazon_schema, use_container_width=True)
+
+        st.markdown("### `uber_rides` Table Schema (Example of Geospatial Data)")
+        uber_schema = get_table_schema(company_conn, 'uber_rides')
+        st.dataframe(uber_schema, use_container_width=True)
+
+        st.markdown("### `nyse_trades` Table Schema (Example of High-Frequency Data)")
+        nyse_schema = get_table_schema(company_conn, 'nyse_trades')
+        st.dataframe(nyse_schema, use_container_width=True)
     
     with tab2:
         st.subheader("🛠️ Scaling Strategies")
@@ -7888,123 +8152,172 @@ def show_olap_vs_oltp():
     # Real-world examples with interactive charts
     st.subheader("🏢 Real-World Implementation Examples")
     
-    tab1, tab2, tab3 = st.tabs(["Banking System", "E-commerce Platform", "Healthcare System"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Banking System", "E-commerce Platform", "Healthcare System", "📚 Schema Info"])
     
     with tab1:
+        st.subheader("🏦 Banking System - OLTP & OLAP")
+        st.markdown("Explore transactional and analytical data patterns in a banking context.")
+
+        oltp_conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+        olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+
+        # OLTP Data (NYSE example)
+        st.markdown("### OLTP: Account & Order Transactions (NYSE Data)")
+        nyse_accounts = pd.read_sql_query("SELECT * FROM nyse_accounts", oltp_conn)
+        nyse_orders = pd.read_sql_query("SELECT * FROM nyse_orders", oltp_conn)
+
         col1, col2 = st.columns(2)
-        
         with col1:
-            st.markdown("### 🏦 Banking OLTP")
-            st.markdown("""
-            - **Account transactions**: Deposits, withdrawals, transfers
-            - **ATM operations**: Balance inquiries, cash withdrawals
-            - **Online banking**: Bill payments, account management
-            - **Credit card processing**: Authorization, settlement
-            """)
-            
-            # Sample transaction volume chart
-            banking_data = pd.DataFrame({
-                'Hour': range(24),
-                'Transactions': [120, 80, 60, 40, 35, 45, 180, 320, 450, 380, 
-                               420, 480, 520, 500, 460, 520, 580, 640, 580, 480, 380, 280, 200, 160]
-            })
-            fig_banking = px.bar(banking_data, x='Hour', y='Transactions',
-                               title='Daily Transaction Volume Pattern')
-            st.plotly_chart(fig_banking, use_container_width=True)
-        
+            st.metric("Total Accounts", len(nyse_accounts))
+            st.metric("Total Orders", len(nyse_orders))
         with col2:
-            st.markdown("### 📊 Banking OLAP")
-            st.markdown("""
-            - **Risk analysis**: Credit scoring, fraud detection
-            - **Customer analytics**: Behavior patterns, segmentation
-            - **Regulatory reporting**: Compliance, audit reports
-            - **Business intelligence**: KPIs, trends, forecasting
-            """)
-            
-            # Sample analytical query performance
-            query_data = pd.DataFrame({
-                'Query Type': ['Risk Assessment', 'Customer Segmentation', 'Fraud Detection', 'Regulatory Report'],
-                'Avg Response (s)': [15, 45, 8, 120],
-                'Data Processed (GB)': [50, 200, 25, 500]
-            })
-            fig_queries = px.scatter(query_data, x='Avg Response (s)', y='Data Processed (GB)',
-                                   size='Data Processed (GB)', color='Query Type',
-                                   title='Analytical Query Performance')
-            st.plotly_chart(fig_queries, use_container_width=True)
+            st.metric("Avg Account Balance", f"${nyse_accounts['balance'].mean():,.2f}")
+            st.metric("Filled Orders", nyse_orders[nyse_orders['status'] == 'FILLED'].shape[0])
+
+        st.markdown("#### Sample Orders")
+        st.dataframe(nyse_orders.head(5), use_container_width=True)
+
+        # OLAP Data (NYSE Aggregates)
+        st.markdown("### OLAP: Minute-level OHLC Aggregates (NYSE Data)")
+        nyse_ohlc = pd.read_sql_query("SELECT * FROM agg_nyse_minute_ohlc", olap_conn)
+
+        if not nyse_ohlc.empty:
+            st.metric("Total OHLC Records", len(nyse_ohlc))
+            st.metric("Avg Daily Volume", f"{nyse_ohlc['volume'].mean():,.0f}")
+
+            st.markdown("#### Price Trend (Sample Ticker)")
+            sample_ticker = st.selectbox("Select Ticker for OHLC Trend:", nyse_ohlc['ticker'].unique())
+            if sample_ticker:
+                ticker_data = nyse_ohlc[nyse_ohlc['ticker'] == sample_ticker].sort_values('minute_ts')
+                fig_ohlc = go.Figure(data=[go.Candlestick(x=ticker_data['minute_ts'],
+                                                        open=ticker_data['open'],
+                                                        high=ticker_data['high'],
+                                                        low=ticker_data['low'],
+                                                        close=ticker_data['close'])])
+                fig_ohlc.update_layout(title=f'{sample_ticker} Minute OHLC')
+                st.plotly_chart(fig_ohlc, use_container_width=True)
+        else:
+            st.info("No NYSE OHLC data available.")
+
+        oltp_conn.close()
+        olap_conn.close()
     
     with tab2:
         st.markdown("### 🛒 E-commerce System Architecture")
         
         # Netflix-style architecture for e-commerce
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 25px; border-radius: 15px; color: white;">
-            <h4 style="text-align: center; margin-bottom: 20px;">E-COMMERCE DATA ARCHITECTURE</h4>
-            
-            <div style="display: flex; justify-content: space-between; margin: 20px 0;">
-                <div style="text-align: center;">
-                    <div style="background: #4299E1; padding: 15px; border-radius: 8px; margin: 10px;">
-                        <div style="font-weight: bold;">OLTP Layer</div>
-                        <div style="font-size: 24px; margin: 10px 0;">🏪</div>
-                        <div style="font-size: 12px;">
-                            • Order Processing<br>
-                            • Inventory Management<br>
-                            • User Authentication<br>
-                            • Payment Processing
-                        </div>
-                    </div>
-                </div>
-                
-                <div style="text-align: center;">
-                    <div style="background: #48BB78; padding: 15px; border-radius: 8px; margin: 10px;">
-                        <div style="font-weight: bold;">ETL Pipeline</div>
-                        <div style="font-size: 24px; margin: 10px 0;">🔄</div>
-                        <div style="font-size: 12px;">
-                            • Data Extraction<br>
-                            • Transformation<br>
-                            • Data Quality<br>
-                            • Loading
-                        </div>
-                    </div>
-                </div>
-                
-                <div style="text-align: center;">
-                    <div style="background: #ED8936; padding: 15px; border-radius: 8px; margin: 10px;">
-                        <div style="font-weight: bold;">OLAP Layer</div>
-                        <div style="font-size: 24px; margin: 10px 0;">📊</div>
-                        <div style="font-size: 12px;">
-                            • Sales Analytics<br>
-                            • Customer Insights<br>
-                            • Product Performance<br>
-                            • Forecasting
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.subheader("🛒 E-commerce Platform - OLTP & OLAP")
+        st.markdown("Analyze customer orders and sales aggregates in an e-commerce setting.")
+
+        oltp_conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+        olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+
+        # OLTP Data (Amazon example)
+        st.markdown("### OLTP: Customer & Order Details (Amazon Data)")
+        amazon_customers = pd.read_sql_query("SELECT * FROM amazon_customers", oltp_conn)
+        amazon_orders = pd.read_sql_query("SELECT * FROM amazon_orders", oltp_conn)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Customers", len(amazon_customers))
+            st.metric("Total Orders", len(amazon_orders))
+        with col2:
+            st.metric("Avg Orders per Customer", f"{len(amazon_orders) / len(amazon_customers):.1f}")
+            st.metric("Completed Orders", amazon_orders[amazon_orders['status'] == 'delivered'].shape[0])
+
+        st.markdown("#### Sample Orders")
+        st.dataframe(amazon_orders.head(5), use_container_width=True)
+
+        # OLAP Data (Amazon Aggregates)
+        st.markdown("### OLAP: Daily Sales Aggregates (Amazon Data)")
+        amazon_sales_agg = pd.read_sql_query("SELECT * FROM agg_amazon_daily_sales", olap_conn)
+
+        if not amazon_sales_agg.empty:
+            st.metric("Total Sales Records", len(amazon_sales_agg))
+            st.metric("Total Gross Revenue", f"${amazon_sales_agg['gross_revenue_aed'].sum():,.2f}")
+
+            st.markdown("#### Daily Gross Revenue Trend")
+            fig_sales = px.line(amazon_sales_agg, x='date', y='gross_revenue_aed',
+                                title='Daily Gross Revenue (AED)')
+            st.plotly_chart(fig_sales, use_container_width=True)
+
+            st.markdown("#### Orders by Category")
+            fig_category = px.bar(amazon_sales_agg, x='category', y='orders',
+                                  title='Total Orders by Product Category')
+            st.plotly_chart(fig_category, use_container_width=True)
+        else:
+            st.info("No Amazon sales aggregate data available.")
+
+        oltp_conn.close()
+        olap_conn.close()
     
     with tab3:
-        st.markdown("### 🏥 Healthcare System")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("""
-            **OLTP Applications:**
-            - Patient registration and scheduling
-            - Electronic health records (EHR)
-            - Prescription management
-            - Billing and insurance processing
-            """)
-            
-        with col2:
-            st.markdown("""
-            **OLAP Applications:**
-            - Population health analytics
-            - Treatment outcome analysis
-            - Resource utilization reporting
-            - Predictive health modeling
-            """)
+        st.subheader("🏥 Healthcare System - Conceptual OLTP & OLAP")
+        st.markdown("Conceptual view of transactional and analytical data in a healthcare context, using existing data models as proxies.")
+
+        oltp_conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+        olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+
+        company_proxy = st.selectbox("Select a company to proxy healthcare data:", ["Uber", "Airbnb"], key="healthcare_proxy")
+
+        if company_proxy == "Uber":
+            st.markdown("### OLTP: Patient Records (Uber Users/Rides Proxy)")
+            users = pd.read_sql_query("SELECT * FROM uber_users", oltp_conn)
+            rides = pd.read_sql_query("SELECT * FROM uber_rides", oltp_conn)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Patients (Users)", len(users))
+                st.metric("Total Appointments (Rides)", len(rides))
+            with col2:
+                st.metric("Avg Patient Rating", f"{users['rating'].mean():.1f}" if 'rating' in users.columns else "N/A")
+                st.metric("Completed Appointments", rides[rides['status'] == 'completed'].shape[0])
+
+            st.markdown("#### Sample Patient Records")
+            st.dataframe(users.head(5), use_container_width=True)
+
+            st.markdown("### OLAP: Treatment Outcomes (Uber Daily Revenue Proxy)")
+            uber_daily_revenue = pd.read_sql_query("SELECT * FROM agg_uber_daily_revenue", olap_conn)
+            if not uber_daily_revenue.empty:
+                st.metric("Total Revenue from Services", f"${uber_daily_revenue['gross_revenue_aed'].sum():,.2f}")
+                st.metric("Avg Service Cost", f"${uber_daily_revenue['avg_fare_aed'].mean():,.2f}")
+                st.markdown("#### Daily Service Revenue Trend")
+                fig_revenue = px.line(uber_daily_revenue, x='date', y='gross_revenue_aed',
+                                      title='Daily Service Revenue (AED)')
+                st.plotly_chart(fig_revenue, use_container_width=True)
+            else:
+                st.info("No Uber daily revenue data available to proxy healthcare outcomes.")
+
+        elif company_proxy == "Airbnb":
+            st.markdown("### OLTP: Patient Records (Airbnb Guests/Bookings Proxy)")
+            guests = pd.read_sql_query("SELECT * FROM airbnb_guests", oltp_conn)
+            bookings = pd.read_sql_query("SELECT * FROM airbnb_bookings", oltp_conn)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Patients (Guests)", len(guests))
+                st.metric("Total Appointments (Bookings)", len(bookings))
+            with col2:
+                st.metric("Avg Member Since (Days)", f"{(datetime.now() - pd.to_datetime(guests['member_since'])).mean().days:.0f}" if 'member_since' in guests.columns else "N/A")
+                st.metric("Confirmed Appointments", bookings[bookings['status'] == 'confirmed'].shape[0] if 'status' in bookings.columns else "N/A")
+
+            st.markdown("#### Sample Patient Records")
+            st.dataframe(guests.head(5), use_container_width=True)
+
+            st.markdown("### OLAP: Treatment Outcomes (Airbnb Occupancy Proxy)")
+            airbnb_occupancy = pd.read_sql_query("SELECT * FROM agg_airbnb_occupancy", olap_conn)
+            if not airbnb_occupancy.empty:
+                st.metric("Total Occupied Days", f"{airbnb_occupancy['occupied_nights'].sum():,}")
+                st.metric("Avg Occupancy Rate", f"{airbnb_occupancy['occupancy_rate'].mean():.1%}")
+                st.markdown("#### Daily Occupancy Rate Trend")
+                fig_occupancy = px.line(airbnb_occupancy, x='date', y='occupancy_rate',
+                                       title='Daily Occupancy Rate')
+                st.plotly_chart(fig_occupancy, use_container_width=True)
+            else:
+                st.info("No Airbnb occupancy data available to proxy healthcare outcomes.")
+
+        oltp_conn.close()
+        olap_conn.close()
     
     # Performance optimization tips
     st.subheader("⚡ Performance Optimization")
@@ -8031,219 +8344,138 @@ def show_olap_vs_oltp():
         - **Parallel processing**: Leverage MPP architectures
         """)
 
+    with tab4:
+        st.subheader("📚 Schema Info - OLAP vs OLTP")
+        st.markdown("Explore the database schemas for OLTP and OLAP examples.")
+
+        def get_table_schema(conn, table_name):
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            schema_info = cursor.fetchall()
+            schema_df = pd.DataFrame(schema_info, columns=['cid', 'name', 'type', 'notnull', 'dflt_value', 'pk'])
+            return schema_df[['name', 'type', 'notnull', 'pk']]
+
+        st.markdown("### OLTP Schemas (from `module4_oltp.db`)")
+        oltp_conn = sqlite3.connect('module4_oltp.db', check_same_thread=False)
+        st.markdown("#### `uber_users` Table")
+        st.dataframe(get_table_schema(oltp_conn, 'uber_users'), use_container_width=True)
+        st.markdown("#### `uber_rides` Table")
+        st.dataframe(get_table_schema(oltp_conn, 'uber_rides'), use_container_width=True)
+        oltp_conn.close()
+
+        st.markdown("### OLAP Schemas (from `module5_olap_aggregates.db`)")
+        olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+        st.markdown("#### `agg_uber_daily_revenue` Table")
+        st.dataframe(get_table_schema(olap_conn, 'agg_uber_daily_revenue'), use_container_width=True)
+        olap_conn.close()
+
 def show_data_science_analytics():
     st.header("🧠 Data Science & Analytics")
     st.markdown("Explore machine learning pipelines and advanced analytics use cases")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Use Cases", "🤖 ML Pipelines", "🔮 Predictive Analytics", "📊 Business Analytics"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Use Cases", "🤖 ML Pipelines", "🔮 Predictive Analytics", "📊 Business Analytics", "📚 Schema Info"])
     
     with tab1:
-        st.subheader("🎯 Data Science Applications")
-        
-        # Create interactive use case explorer
-        use_case = st.selectbox("Choose a use case to explore:", [
-            "Recommendation Systems",
-            "Risk Analysis", 
-            "Customer Churn Analysis",
-            "Credit Risk Management",
-            "Portfolio Management",
-            "Fraud Detection",
-            "Demand Forecasting"
-        ])
-        
-        if use_case == "Recommendation Systems":
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.markdown("""
-                ### 🎬 Netflix-Style Recommendation Engine
-                
-                **Architecture Components:**
-                - **Data Collection**: User interactions, viewing history, ratings
-                - **Feature Engineering**: User profiles, content features, context
-                - **Model Training**: Collaborative filtering, content-based, hybrid
-                - **Real-time Serving**: Low-latency prediction API
-                - **A/B Testing**: Continuous experimentation and optimization
-                """)
-                
-                # Recommendation performance metrics
-                rec_metrics = pd.DataFrame({
-                    'Algorithm': ['Collaborative Filtering', 'Content-Based', 'Matrix Factorization', 'Deep Learning'],
-                    'Precision': [0.75, 0.68, 0.82, 0.88],
-                    'Recall': [0.65, 0.72, 0.79, 0.85],
-                    'Training Time (hrs)': [2, 1, 8, 24]
-                })
-                
-                fig_rec = px.scatter(rec_metrics, x='Precision', y='Recall', 
-                                   size='Training Time (hrs)', color='Algorithm',
-                                   title='Recommendation Algorithm Performance')
-                st.plotly_chart(fig_rec, use_container_width=True)
-            
-            with col2:
-                st.markdown("""
-                **Tech Stack:**
-                - **Spark**: Batch processing
-                - **Kafka**: Real-time events
-                - **Redis**: Caching recommendations
-                - **TensorFlow**: Deep learning models
-                - **Kubernetes**: Model serving
-                """)
-                
-                # Sample recommendation results
-                st.markdown("**Sample Output:**")
-                recommendations = pd.DataFrame({
-                    'User': ['User_123', 'User_456'],
-                    'Top_Recommendation': ['Stranger Things', 'The Crown'],
-                    'Confidence': [0.92, 0.87]
-                })
-                st.dataframe(recommendations, use_container_width=True)
-        
-        elif use_case == "Customer Churn Analysis":
-            st.markdown("""
-            ### 📱 Telecom Customer Churn Prediction
-            
-            **Business Problem:** Predict which customers are likely to cancel their subscription
-            
-            **Data Sources:**
-            - Customer demographics and account information
-            - Usage patterns (call duration, data usage, SMS)
-            - Service interactions and support tickets
-            - Payment history and billing data
-            """)
-            
-            # Churn analysis visualization
-            churn_data = pd.DataFrame({
-                'Month': pd.date_range('2024-01-01', periods=12, freq='M'),
-                'Churn_Rate': [0.05, 0.04, 0.06, 0.08, 0.07, 0.09, 0.11, 0.10, 0.08, 0.07, 0.06, 0.05],
-                'Predicted_Churn': [0.052, 0.045, 0.058, 0.075, 0.072, 0.085, 0.095, 0.098, 0.082, 0.071, 0.063, 0.054]
-            })
-            
-            fig_churn = px.line(churn_data, x='Month', y=['Churn_Rate', 'Predicted_Churn'],
-                              title='Actual vs Predicted Churn Rate')
-            st.plotly_chart(fig_churn, use_container_width=True)
-            
+        st.subheader("📈 Use Cases - Data Science & Analytics")
+        st.markdown("Explore real-world data science applications with interactive data.")
+
+        module7_conn = sqlite3.connect('module7_ml_features.db', check_same_thread=False)
+
+        # Load Uber ride features and model artifacts
+        uber_ride_features = pd.read_sql_query("SELECT * FROM features_uber_ride", module7_conn)
+        model_artifacts = pd.read_sql_query("SELECT * FROM model_artifacts WHERE model_name LIKE 'Uber%'", module7_conn)
+
+        st.markdown("### Uber Ride Cancellation Prediction")
+        if not uber_ride_features.empty:
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("""
-                **Key Features:**
-                - Contract length and type
-                - Average monthly spending
-                - Service usage patterns
-                - Customer service interactions
-                - Payment method and history
-                """)
-            
+                st.metric("Total Rides Analyzed", len(uber_ride_features))
+                st.metric("Cancellation Rate", f"{uber_ride_features['label_cancelled'].mean():.1%}")
             with col2:
-                st.markdown("""
-                **Business Impact:**
-                - 15% reduction in churn rate
-                - $2.3M annual revenue retention
-                - 85% model accuracy
-                - 30% improvement in campaign targeting
-                """)
-        
-        elif use_case == "Credit Risk Management":
-            st.markdown("""
-            ### 🏦 Banking Credit Risk Assessment
-            
-            **Objective:** Assess the probability of loan default and set appropriate interest rates
-            """)
-            
-            # Credit risk visualization
-            risk_data = pd.DataFrame({
-                'Credit_Score': [300, 400, 500, 600, 700, 800, 850],
-                'Default_Rate': [0.45, 0.25, 0.15, 0.08, 0.04, 0.02, 0.01],
-                'Loan_Volume': [1000, 2500, 8000, 15000, 25000, 18000, 5000]
-            })
-            
-            fig_risk = px.scatter(risk_data, x='Credit_Score', y='Default_Rate',
-                                size='Loan_Volume', title='Credit Score vs Default Rate')
-            st.plotly_chart(fig_risk, use_container_width=True)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("""
-                **Risk Factors:**
-                - Credit history and score
-                - Debt-to-income ratio
-                - Employment stability
-                - Collateral value
-                - Economic indicators
-                """)
-            
-            with col2:
-                st.markdown("""
-                **Model Outputs:**
-                - Probability of default (PD)
-                - Loss given default (LGD)
-                - Exposure at default (EAD)
-                - Risk-adjusted pricing
-                """)
+                st.metric("Avg Predicted Fare", f"${uber_ride_features['predicted_fare_aed'].mean():,.2f}")
+                st.metric("Avg Driver Acceptance Rate", f"{uber_ride_features['driver_accept_rate'].mean():.1%}")
+
+            st.markdown("#### Cancellation by Pickup Hour")
+            cancellation_by_hour = uber_ride_features.groupby('pickup_hour')['label_cancelled'].mean().reset_index()
+            fig_cancel = px.bar(cancellation_by_hour, x='pickup_hour', y='label_cancelled',
+                                title='Cancellation Rate by Pickup Hour')
+            st.plotly_chart(fig_cancel, use_container_width=True)
+
+            st.markdown("#### Predicted Fare Distribution")
+            fig_fare = px.histogram(uber_ride_features, x='predicted_fare_aed', nbins=50,
+                                   title='Distribution of Predicted Fares')
+            st.plotly_chart(fig_fare, use_container_width=True)
+        else:
+            st.info("No Uber ride features data available.")
+
+        st.markdown("### Model Performance Metrics")
+        if not model_artifacts.empty:
+            st.dataframe(model_artifacts[['model_name', 'version', 'split', 'metrics', 'train_ts']], use_container_width=True)
+
+            # Display metrics from JSON
+            if 'metrics' in model_artifacts.columns:
+                metrics_data = []
+                for idx, row in model_artifacts.iterrows():
+                    metrics = json.loads(row['metrics'])
+                    metrics_data.append({
+                        'Model': row['model_name'],
+                        'Version': row['version'],
+                        'Split': row['split'],
+                        'Accuracy': metrics.get('accuracy'),
+                        'Precision': metrics.get('precision'),
+                        'Recall': metrics.get('recall'),
+                        'F1 Score': metrics.get('f1_score')
+                    })
+                metrics_df = pd.DataFrame(metrics_data)
+                st.markdown("#### Detailed Model Metrics")
+                st.dataframe(metrics_df, use_container_width=True)
+        else:
+            st.info("No model artifacts data available.")
+
+        module7_conn.close()
     
     with tab2:
-        st.subheader("🤖 Machine Learning Pipeline Architecture")
-        
-        # ML Pipeline visualization
-        st.markdown("""
-        <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); padding: 25px; border-radius: 15px; color: white; margin: 20px 0;">
-            <h4 style="text-align: center; margin-bottom: 20px;">ML PIPELINE ARCHITECTURE</h4>
-            
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0;">
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Data Ingestion</div>
-                        <div style="font-size: 20px; margin: 10px 0;">📥</div>
-                        <div style="font-size: 12px;">Kafka, Kinesis</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Feature Store</div>
-                        <div style="font-size: 20px; margin: 10px 0;">🗃️</div>
-                        <div style="font-size: 12px;">Feast, Tecton</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Model Training</div>
-                        <div style="font-size: 20px; margin: 10px 0;">🧠</div>
-                        <div style="font-size: 12px;">MLflow, Kubeflow</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Model Serving</div>
-                        <div style="font-size: 20px; margin: 10px 0;">🚀</div>
-                        <div style="font-size: 12px;">Seldon, KFServing</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 20px;">
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Monitoring</div>
-                        <div style="font-size: 20px; margin: 10px 0;">📊</div>
-                        <div style="font-size: 12px;">Evidently, Grafana</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Experiment Tracking</div>
-                        <div style="font-size: 20px; margin: 10px 0;">📝</div>
-                        <div style="font-size: 12px;">MLflow, W&B</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: bold;">Model Registry</div>
-                        <div style="font-size: 20px; margin: 10px 0;">🏛️</div>
-                        <div style="font-size: 12px;">MLflow, DVC</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.subheader("🤖 ML Pipelines - Model Artifacts")
+        st.markdown("Explore metadata and performance of trained machine learning models.")
+
+        module7_conn = sqlite3.connect('module7_ml_features.db', check_same_thread=False)
+        model_artifacts = pd.read_sql_query("SELECT * FROM model_artifacts", module7_conn)
+
+        if not model_artifacts.empty:
+            st.markdown("### All Model Artifacts")
+            st.dataframe(model_artifacts[['model_id', 'model_name', 'version', 'train_ts', 'split', 'artifact_path']], use_container_width=True)
+
+            st.markdown("### Model Performance Overview")
+            # Parse JSON metrics and display
+            metrics_data = []
+            for idx, row in model_artifacts.iterrows():
+                metrics = json.loads(row['metrics'])
+                metrics_data.append({
+                    'Model': row['model_name'],
+                    'Version': row['version'],
+                    'Split': row['split'],
+                    'Accuracy': metrics.get('accuracy'),
+                    'Precision': metrics.get('precision'),
+                    'Recall': metrics.get('recall'),
+                    'F1 Score': metrics.get('f1_score')
+                })
+            metrics_df = pd.DataFrame(metrics_data)
+            st.dataframe(metrics_df, use_container_width=True)
+
+            st.markdown("#### Model Training Time Distribution")
+            fig_train_time = px.histogram(model_artifacts, x='train_ts', title='Model Training Timestamps')
+            st.plotly_chart(fig_train_time, use_container_width=True)
+
+            st.markdown("#### Model Version Distribution")
+            version_counts = model_artifacts['version'].value_counts()
+            fig_version = px.pie(version_counts, values=version_counts.values, names=version_counts.index,
+                                 title='Distribution of Model Versions')
+            st.plotly_chart(fig_version, use_container_width=True)
+
+        else:
+            st.info("No model artifacts data available.")
+
+        module7_conn.close()
         
         # MLOps maturity levels
         st.subheader("📈 MLOps Maturity Levels")
@@ -8262,103 +8494,95 @@ def show_data_science_analytics():
         st.dataframe(maturity_levels, use_container_width=True)
     
     with tab3:
-        st.subheader("🔮 Predictive Analytics Use Cases")
-        
-        prediction_type = st.selectbox("Choose prediction type:", [
-            "Demand Forecasting",
-            "Price Optimization", 
-            "Maintenance Prediction",
-            "Market Trend Analysis"
-        ])
-        
-        if prediction_type == "Demand Forecasting":
-            st.markdown("""
-            ### 📦 Supply Chain Demand Forecasting
-            
-            **Business Challenge:** Optimize inventory levels while minimizing stockouts
-            """)
-            
-            # Generate demand forecasting data
-            dates = pd.date_range('2024-01-01', periods=365, freq='D')
-            base_demand = 1000
-            seasonal = 200 * np.sin(2 * np.pi * np.arange(365) / 365)
-            trend = np.arange(365) * 0.5
-            noise = np.random.normal(0, 50, 365)
-            
-            demand_data = pd.DataFrame({
-                'Date': dates,
-                'Actual_Demand': base_demand + seasonal + trend + noise,
-                'Predicted_Demand': base_demand + seasonal + trend + np.random.normal(0, 25, 365)
-            })
-            
-            fig_demand = px.line(demand_data, x='Date', y=['Actual_Demand', 'Predicted_Demand'],
-                               title='Demand Forecasting: Actual vs Predicted')
-            st.plotly_chart(fig_demand, use_container_width=True)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("""
-                **Features Used:**
-                - Historical demand patterns
-                - Seasonal trends
-                - Economic indicators
-                - Marketing campaigns
-                - Weather data
-                """)
-            
-            with col2:
-                accuracy_metrics = pd.DataFrame({
-                    'Metric': ['MAPE', 'RMSE', 'MAE'],
-                    'Value': ['8.5%', '45.2', '32.1'],
-                    'Target': ['<10%', '<50', '<35']
-                })
-                st.dataframe(accuracy_metrics, use_container_width=True)
+        st.subheader("🔮 Predictive Analytics - Feature Analysis")
+        st.markdown("Analyze features used in predictive models and their distributions.")
+
+        module7_conn = sqlite3.connect('module7_ml_features.db', check_same_thread=False)
+        uber_ride_features = pd.read_sql_query("SELECT * FROM features_uber_ride", module7_conn)
+
+        if not uber_ride_features.empty:
+            st.markdown("### Predicted Fare Distribution")
+            fig_fare_pred = px.histogram(uber_ride_features, x='predicted_fare_aed', nbins=50,
+                                         title='Distribution of Predicted Fares (AED)')
+            st.plotly_chart(fig_fare_pred, use_container_width=True)
+
+            st.markdown("### Cancellation Label Distribution")
+            cancel_counts = uber_ride_features['label_cancelled'].map({0: 'Not Cancelled', 1: 'Cancelled'}).value_counts()
+            fig_cancel_label = px.pie(cancel_counts, values=cancel_counts.values, names=cancel_counts.index,
+                                      title='Ride Cancellation Distribution')
+            st.plotly_chart(fig_cancel_label, use_container_width=True)
+
+            st.markdown("### Driver Acceptance Rate vs. Cancellation")
+            fig_accept_cancel = px.box(uber_ride_features, x='label_cancelled', y='driver_accept_rate',
+                                       points="all", title='Driver Acceptance Rate by Cancellation Status')
+            st.plotly_chart(fig_accept_cancel, use_container_width=True)
+
+        else:
+            st.info("No Uber ride features data available for predictive analytics.")
+
+        module7_conn.close()
     
     with tab4:
-        st.subheader("📊 Business Analytics Dashboard")
-        
-        # Generate business metrics
-        business_metrics = pd.DataFrame({
-            'KPI': ['Customer Acquisition Cost', 'Customer Lifetime Value', 'Conversion Rate', 'Retention Rate'],
-            'Current': [150, 1200, 3.2, 85.5],
-            'Target': [120, 1500, 4.0, 90.0],
-            'Unit': ['$', '$', '%', '%']
-        })
-        
-        # Create metrics visualization
-        fig_kpi = go.Figure()
-        fig_kpi.add_trace(go.Bar(x=business_metrics['KPI'], y=business_metrics['Current'], 
-                               name='Current', marker_color='lightblue'))
-        fig_kpi.add_trace(go.Bar(x=business_metrics['KPI'], y=business_metrics['Target'], 
-                               name='Target', marker_color='orange'))
-        fig_kpi.update_layout(title='Key Performance Indicators', barmode='group')
-        st.plotly_chart(fig_kpi, use_container_width=True)
-        
-        # Real-time metrics simulation
-        st.markdown("### 📈 Real-time Analytics Simulation")
-        if st.button("Generate Real-time Data"):
-            metrics_placeholder = st.empty()
-            for i in range(10):
-                current_metrics = {
-                    'Active Users': np.random.randint(8500, 12000),
-                    'Revenue Today': np.random.randint(45000, 65000),
-                    'Conversion Rate': round(np.random.uniform(2.8, 4.2), 2),
-                    'Avg Session Duration': f"{np.random.randint(8, 15)}min {np.random.randint(10, 59)}s"
-                }
-                
-                with metrics_placeholder.container():
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Active Users", current_metrics['Active Users'])
-                    with col2:
-                        st.metric("Revenue Today", f"${current_metrics['Revenue Today']:,}")
-                    with col3:
-                        st.metric("Conversion Rate", f"{current_metrics['Conversion Rate']}%")
-                    with col4:
-                        st.metric("Avg Session", current_metrics['Avg Session Duration'])
-                
-                import time
-                time.sleep(1)
+        st.subheader("📊 Business Analytics - Aggregated Metrics")
+        st.markdown("Visualize key business performance indicators from aggregated data.")
+
+        olap_conn = sqlite3.connect('module5_olap_aggregates.db', check_same_thread=False)
+        uber_daily_revenue = pd.read_sql_query("SELECT * FROM agg_uber_daily_revenue", olap_conn)
+
+        if not uber_daily_revenue.empty:
+            st.markdown("### Daily Revenue and Rides Overview")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Gross Revenue (AED)", f"${uber_daily_revenue['gross_revenue_aed'].sum():,.2f}")
+                st.metric("Total Completed Rides", f"{uber_daily_revenue['completed_rides'].sum():,}")
+            with col2:
+                st.metric("Average Daily Revenue (AED)", f"${uber_daily_revenue['gross_revenue_aed'].mean():,.2f}")
+                st.metric("Average Daily Rides", f"{uber_daily_revenue['total_rides'].mean():,.0f}")
+
+            st.markdown("#### Daily Gross Revenue Trend")
+            fig_revenue_trend = px.line(uber_daily_revenue, x='date', y='gross_revenue_aed',
+                                        title='Daily Gross Revenue Trend (AED)')
+            st.plotly_chart(fig_revenue_trend, use_container_width=True)
+
+            st.markdown("#### Daily Cancellation Rate Trend")
+            fig_cancel_rate = px.line(uber_daily_revenue, x='date', y='cancellation_rate',
+                                       title='Daily Cancellation Rate Trend')
+            st.plotly_chart(fig_cancel_rate, use_container_width=True)
+
+            st.markdown("#### Rides by City")
+            rides_by_city = uber_daily_revenue.groupby('city')['total_rides'].sum().reset_index()
+            fig_rides_city = px.bar(rides_by_city, x='city', y='total_rides',
+                                    title='Total Rides by City')
+            st.plotly_chart(fig_rides_city, use_container_width=True)
+
+        else:
+            st.info("No Uber daily revenue data available for business analytics.")
+
+        olap_conn.close()
+
+    with tab5:
+        st.subheader("📚 Schema Info - Data Science & Analytics")
+        st.markdown("Explore the database schemas for ML features and model artifacts.")
+
+        # Initialize Module 7 database connection
+        module7_conn = sqlite3.connect('module7_ml_features.db', check_same_thread=False)
+
+        def get_table_schema(conn, table_name):
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            schema_info = cursor.fetchall()
+            schema_df = pd.DataFrame(schema_info, columns=['cid', 'name', 'type', 'notnull', 'dflt_value', 'pk'])
+            return schema_df[['name', 'type', 'notnull', 'pk']]
+
+        st.markdown("### `features_uber_ride` Table Schema")
+        uber_features_schema = get_table_schema(module7_conn, 'features_uber_ride')
+        st.dataframe(uber_features_schema, use_container_width=True)
+
+        st.markdown("### `model_artifacts` Table Schema")
+        model_artifacts_schema = get_table_schema(module7_conn, 'model_artifacts')
+        st.dataframe(model_artifacts_schema, use_container_width=True)
+
+        module7_conn.close()
 
 def show_control_and_logs():
     st.header("📊 Control and Logs")
