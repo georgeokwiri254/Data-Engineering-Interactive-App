@@ -68,7 +68,7 @@ def generate_sample_data():
         'success': np.random.choice([True, False], n_records, p=[0.95, 0.05])
     })
 
-@st.cache_data
+@st.cache_resource
 def create_company_database():
     """Create SQLite database with company synthetic datasets"""
     conn = sqlite3.connect(':memory:', check_same_thread=False)
@@ -5691,6 +5691,165 @@ def create_processing_status_charts(data, company_name):
                      title="Daily Processing Success Rate (%)")
         st.plotly_chart(fig, use_container_width=True)
 
+def create_etl_overview_dashboard(module3_conn, company_name):
+    """Create ETL overview dashboard with various charts"""
+    st.markdown("### 📈 ETL Pipeline Visualizations")
+    
+    # Job status distribution
+    status_query = f"""
+    SELECT status, COUNT(*) as job_count
+    FROM processing_jobs 
+    WHERE company = '{company_name}'
+    GROUP BY status
+    ORDER BY job_count DESC
+    """
+    
+    status_data = query_module3_data(module3_conn, status_query)
+    
+    if not status_data.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Job Status Pie Chart
+            fig_pie = px.pie(status_data, values='job_count', names='status',
+                           title="ETL Job Status Distribution")
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # Engine Distribution
+            engine_query = f"""
+            SELECT engine, COUNT(*) as job_count
+            FROM processing_jobs 
+            WHERE company = '{company_name}'
+            GROUP BY engine
+            ORDER BY job_count DESC
+            """
+            
+            engine_data = query_module3_data(module3_conn, engine_query)
+            if not engine_data.empty:
+                fig_bar = px.bar(engine_data, x='engine', y='job_count',
+                               title="Jobs by Processing Engine")
+                st.plotly_chart(fig_bar, use_container_width=True)
+    
+    # Job Type Distribution
+    type_query = f"""
+    SELECT job_type, COUNT(*) as job_count, 
+           AVG(duration_ms)/1000.0 as avg_duration_sec
+    FROM processing_jobs 
+    WHERE company = '{company_name}' AND duration_ms IS NOT NULL
+    GROUP BY job_type
+    ORDER BY job_count DESC
+    """
+    
+    type_data = query_module3_data(module3_conn, type_query)
+    if not type_data.empty:
+        st.subheader("🔧 Job Types Analysis")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_type = px.bar(type_data, x='job_type', y='job_count',
+                            title="Jobs by Type")
+            st.plotly_chart(fig_type, use_container_width=True)
+        
+        with col2:
+            fig_duration = px.bar(type_data, x='job_type', y='avg_duration_sec',
+                                title="Average Duration by Job Type (seconds)")
+            st.plotly_chart(fig_duration, use_container_width=True)
+
+
+def create_etl_performance_charts(module3_conn, company_name):
+    """Create ETL performance charts showing trends and metrics"""
+    st.markdown("### ⚡ Performance Analysis")
+    
+    # Daily job completion trends
+    trend_query = f"""
+    SELECT 
+        DATE(start_ts) as job_date,
+        COUNT(*) as jobs_per_day,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_jobs,
+        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_jobs,
+        AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END)/1000.0 as avg_duration_sec
+    FROM processing_jobs 
+    WHERE company = '{company_name}' AND start_ts IS NOT NULL
+    GROUP BY DATE(start_ts)
+    ORDER BY job_date DESC
+    LIMIT 30
+    """
+    
+    trend_data = query_module3_data(module3_conn, trend_query)
+    
+    if not trend_data.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Jobs over time
+            fig_trend = px.line(trend_data, x='job_date', y='jobs_per_day',
+                              title="Daily ETL Job Volume")
+            st.plotly_chart(fig_trend, use_container_width=True)
+        
+        with col2:
+            # Success rate over time
+            trend_data['success_rate'] = (trend_data['completed_jobs'] / trend_data['jobs_per_day']) * 100
+            fig_success = px.line(trend_data, x='job_date', y='success_rate',
+                                title="Daily Success Rate (%)")
+            st.plotly_chart(fig_success, use_container_width=True)
+    
+    # Resource utilization analysis
+    resource_query = f"""
+    SELECT 
+        resource_cpu_cores,
+        resource_memory_gb,
+        AVG(duration_ms)/1000.0 as avg_duration_sec,
+        COUNT(*) as job_count
+    FROM processing_jobs 
+    WHERE company = '{company_name}' 
+    AND resource_cpu_cores IS NOT NULL 
+    AND resource_memory_gb IS NOT NULL
+    AND duration_ms IS NOT NULL
+    GROUP BY resource_cpu_cores, resource_memory_gb
+    HAVING job_count >= 5
+    ORDER BY avg_duration_sec
+    """
+    
+    resource_data = query_module3_data(module3_conn, resource_query)
+    
+    if not resource_data.empty:
+        st.subheader("💻 Resource Utilization")
+        
+        # Scatter plot of resource usage vs performance
+        fig_scatter = px.scatter(resource_data, 
+                               x='resource_cpu_cores', 
+                               y='resource_memory_gb',
+                               size='job_count',
+                               color='avg_duration_sec',
+                               title="Resource Usage vs Performance",
+                               labels={'avg_duration_sec': 'Avg Duration (s)'})
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    
+    # Data quality score analysis
+    quality_query = f"""
+    SELECT 
+        ROUND(data_quality_score, 1) as quality_score_rounded,
+        COUNT(*) as job_count,
+        AVG(duration_ms)/1000.0 as avg_duration_sec
+    FROM processing_jobs 
+    WHERE company = '{company_name}' 
+    AND data_quality_score IS NOT NULL
+    AND status = 'completed'
+    GROUP BY ROUND(data_quality_score, 1)
+    ORDER BY quality_score_rounded
+    """
+    
+    quality_data = query_module3_data(module3_conn, quality_query)
+    
+    if not quality_data.empty:
+        st.subheader("✅ Data Quality Analysis")
+        
+        fig_quality = px.bar(quality_data, x='quality_score_rounded', y='job_count',
+                           title="Distribution of Data Quality Scores")
+        st.plotly_chart(fig_quality, use_container_width=True)
+
+
 def show_etl_pipelines():
     st.header("🔄 Module 3: ETL/ELT Pipelines & Staging Data")
     st.markdown("""
@@ -7350,7 +7509,7 @@ def show_processing_systems():
         selected_company = st.selectbox("Select Company for Simulation:", company_options, key="proc_sim_company")
 
         # Fetch jobs for the selected company
-        jobs_query = f"SELECT job_id, job_name, job_type, engine, status, duration_ms, start_ts FROM processing_jobs WHERE company = '{selected_company}' ORDER BY start_ts DESC LIMIT 10"
+        jobs_query = f"SELECT job_id, job_name, job_type, engine, status, duration_ms, records_in, records_out, start_ts FROM processing_jobs WHERE company = '{selected_company}' ORDER BY start_ts DESC LIMIT 10"
         recent_jobs = pd.read_sql_query(jobs_query, module3_conn)
 
         if not recent_jobs.empty:
