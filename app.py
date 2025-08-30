@@ -4,6 +4,9 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import time
+import sqlite3
+from random import choice, randint
 
 st.set_page_config(
     page_title="Data Architecture & Engineering Learning Hub",
@@ -11,6 +14,161 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Add caching to improve performance
+@st.cache_data
+def generate_sample_data():
+    """Generate sample data with caching to improve performance"""
+    np.random.seed(42)
+    n_records = 5000
+    return pd.DataFrame({
+        'timestamp': pd.date_range('2024-01-01', periods=n_records, freq='15min'),
+        'user_id': np.random.randint(1000, 9999, n_records),
+        'event_type': np.random.choice(['purchase', 'view', 'click', 'login', 'logout'], n_records, p=[0.1, 0.4, 0.3, 0.1, 0.1]),
+        'value': np.random.lognormal(mean=3, sigma=1, size=n_records).round(2),
+        'source': np.random.choice(['mobile', 'web', 'api', 'batch'], n_records, p=[0.4, 0.3, 0.2, 0.1]),
+        'region': np.random.choice(['US', 'EU', 'ASIA', 'LATAM'], n_records, p=[0.4, 0.3, 0.2, 0.1]),
+        'processing_time_ms': np.random.exponential(scale=50, size=n_records).round(1),
+        'success': np.random.choice([True, False], n_records, p=[0.95, 0.05])
+    })
+
+@st.cache_data
+def create_company_database():
+    """Create SQLite database with company synthetic datasets"""
+    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    
+    # Netflix Data
+    netflix_data = generate_netflix_data()
+    netflix_data.to_sql('netflix_viewership', conn, if_exists='replace', index=False)
+    
+    # Amazon Data  
+    amazon_data = generate_amazon_data()
+    amazon_data.to_sql('amazon_sales', conn, if_exists='replace', index=False)
+    
+    # Uber Data
+    uber_data = generate_uber_data()
+    uber_data.to_sql('uber_rides', conn, if_exists='replace', index=False)
+    
+    # NYSE Data
+    nyse_data = generate_nyse_data()
+    nyse_data.to_sql('nyse_trades', conn, if_exists='replace', index=False)
+    
+    return conn
+
+@st.cache_data
+def generate_netflix_data():
+    """Generate realistic Netflix viewership data"""
+    np.random.seed(42)
+    n_records = 10000
+    
+    titles = ['Stranger Things', 'The Crown', 'Ozark', 'Bridgerton', 'Money Heist', 'Squid Game',
+              'The Witcher', 'Orange Is the New Black', 'House of Cards', 'Breaking Bad']
+    
+    genres = ['Drama', 'Comedy', 'Action', 'Documentary', 'Horror', 'Romance', 'Thriller']
+    devices = ['Smart TV', 'Mobile', 'Laptop', 'Tablet', 'Gaming Console']
+    regions = ['US', 'EU', 'APAC', 'LATAM', 'Canada']
+    
+    return pd.DataFrame({
+        'view_id': range(1, n_records + 1),
+        'user_id': np.random.randint(100000, 999999, n_records),
+        'title': np.random.choice(titles, n_records),
+        'genre': np.random.choice(genres, n_records),
+        'watch_duration_min': np.random.lognormal(3.5, 0.8, n_records).astype(int),
+        'completion_rate': np.random.beta(2, 2, n_records).round(2),
+        'device_type': np.random.choice(devices, n_records),
+        'region': np.random.choice(regions, n_records, p=[0.35, 0.25, 0.2, 0.15, 0.05]),
+        'timestamp': pd.date_range('2024-01-01', periods=n_records, freq='5min'),
+        'rating': np.random.choice([1, 2, 3, 4, 5], n_records, p=[0.05, 0.1, 0.15, 0.35, 0.35]),
+        'subscription_type': np.random.choice(['Basic', 'Standard', 'Premium'], n_records, p=[0.3, 0.4, 0.3])
+    })
+
+@st.cache_data  
+def generate_amazon_data():
+    """Generate realistic Amazon sales data"""
+    np.random.seed(43)
+    n_records = 10000
+    
+    categories = ['Electronics', 'Books', 'Clothing', 'Home & Kitchen', 'Sports', 'Beauty', 'Toys']
+    payment_methods = ['Credit Card', 'Debit Card', 'PayPal', 'Amazon Pay', 'Gift Card']
+    shipping_speeds = ['Standard', 'Prime', 'Next Day', '2-Day']
+    
+    return pd.DataFrame({
+        'order_id': range(1, n_records + 1),
+        'customer_id': np.random.randint(10000, 99999, n_records),
+        'product_category': np.random.choice(categories, n_records),
+        'order_value': np.random.lognormal(4, 0.8, n_records).round(2),
+        'quantity': np.random.poisson(2, n_records) + 1,
+        'payment_method': np.random.choice(payment_methods, n_records),
+        'shipping_speed': np.random.choice(shipping_speeds, n_records, p=[0.3, 0.4, 0.15, 0.15]),
+        'prime_member': np.random.choice([True, False], n_records, p=[0.6, 0.4]),
+        'order_date': pd.date_range('2024-01-01', periods=n_records, freq='3min'),
+        'delivery_days': np.random.choice([1, 2, 3, 5, 7], n_records, p=[0.15, 0.25, 0.25, 0.25, 0.1]),
+        'customer_satisfaction': np.random.choice([1, 2, 3, 4, 5], n_records, p=[0.05, 0.1, 0.15, 0.4, 0.3]),
+        'region': np.random.choice(['North America', 'Europe', 'Asia', 'Other'], n_records, p=[0.5, 0.25, 0.2, 0.05])
+    })
+
+@st.cache_data
+def generate_uber_data():
+    """Generate realistic Uber ride data"""
+    np.random.seed(44)
+    n_records = 10000
+    
+    ride_types = ['UberX', 'UberXL', 'UberPool', 'UberBlack', 'UberEats']
+    cities = ['New York', 'Los Angeles', 'Chicago', 'San Francisco', 'Boston', 'Seattle']
+    payment_methods = ['Credit Card', 'PayPal', 'Cash', 'Uber Cash']
+    
+    return pd.DataFrame({
+        'ride_id': range(1, n_records + 1),
+        'driver_id': np.random.randint(1000, 9999, n_records),
+        'rider_id': np.random.randint(10000, 99999, n_records),
+        'ride_type': np.random.choice(ride_types, n_records, p=[0.4, 0.15, 0.2, 0.1, 0.15]),
+        'city': np.random.choice(cities, n_records),
+        'distance_miles': np.random.exponential(5, n_records).round(1),
+        'duration_minutes': np.random.exponential(15, n_records).astype(int) + 5,
+        'fare_amount': np.random.lognormal(2.5, 0.6, n_records).round(2),
+        'tip_amount': np.random.exponential(2, n_records).round(2),
+        'payment_method': np.random.choice(payment_methods, n_records),
+        'rider_rating': np.random.choice([3, 4, 5], n_records, p=[0.1, 0.3, 0.6]),
+        'driver_rating': np.random.choice([3, 4, 5], n_records, p=[0.15, 0.35, 0.5]),
+        'pickup_time': pd.date_range('2024-01-01', periods=n_records, freq='2min'),
+        'surge_multiplier': np.random.choice([1.0, 1.2, 1.5, 2.0, 2.5], n_records, p=[0.6, 0.2, 0.1, 0.08, 0.02])
+    })
+
+@st.cache_data
+def generate_nyse_data():
+    """Generate realistic NYSE trading data"""
+    np.random.seed(45)
+    n_records = 10000
+    
+    symbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX', 'DIS', 'JPM']
+    sectors = ['Technology', 'Healthcare', 'Financial', 'Consumer', 'Industrial', 'Energy']
+    
+    base_prices = {
+        'AAPL': 180, 'GOOGL': 140, 'MSFT': 380, 'AMZN': 150, 'TSLA': 250,
+        'META': 350, 'NVDA': 800, 'NFLX': 400, 'DIS': 100, 'JPM': 150
+    }
+    
+    data = []
+    for i in range(n_records):
+        symbol = np.random.choice(symbols)
+        base_price = base_prices[symbol]
+        price_change = np.random.normal(0, base_price * 0.02)
+        
+        data.append({
+            'trade_id': i + 1,
+            'symbol': symbol,
+            'sector': np.random.choice(sectors),
+            'price': round(base_price + price_change, 2),
+            'volume': np.random.poisson(1000) * 100,
+            'trade_type': np.random.choice(['Buy', 'Sell'], p=[0.52, 0.48]),
+            'timestamp': pd.date_range('2024-01-01 09:30:00', periods=n_records, freq='10s')[i],
+            'market_cap_billion': np.random.exponential(500, 1)[0].round(1),
+            'pe_ratio': np.random.gamma(2, 10, 1)[0].round(1),
+            'dividend_yield': np.random.exponential(2, 1)[0].round(2),
+            'day_change_pct': np.random.normal(0, 2, 1)[0].round(2)
+        })
+    
+    return pd.DataFrame(data)
 
 def main():
     st.title("🏗️ Data Architecture & Engineering Learning Hub")
@@ -59,11 +217,9 @@ def main():
     elif selected_module == "📊 Big Data & Scaling":
         show_big_data_scaling()
     elif selected_module == "🔍 OLAP vs OLTP":
-        st.header("🔍 OLAP vs OLTP")
-        st.info("Analytical vs Transactional processing - Coming Soon!")
+        show_olap_vs_oltp()
     elif selected_module == "🧠 Data Science & Analytics":
-        st.header("🧠 Data Science & Analytics")
-        st.info("ML pipelines and advanced analytics - Coming Soon!")
+        show_data_science_analytics()
     
     # Show company case study if selected
     if selected_company != "Select a company...":
@@ -398,101 +554,95 @@ def show_data_ingestion():
             ["Batch Ingestion Process", "Real-time Ingestion Process", "Hybrid Architecture", "Error Handling Flow"])
         
         if flow_type == "Batch Ingestion Process":
-            # Create enhanced batch processing flow chart
-            fig_batch = go.Figure()
-            
-            # Define enhanced nodes with icons and better styling
-            nodes = {
-                '📊 Data\nSources': {'pos': (2, 8), 'color': '#4A90E2', 'category': 'source'},
-                '⏰ Scheduler\n(Cron/Airflow)': {'pos': (5, 8), 'color': '#7ED321', 'category': 'orchestration'},
-                '⬇️ Extract\nProcess': {'pos': (8, 8), 'color': '#F5A623', 'category': 'etl'},
-                '✅ Data\nValidation': {'pos': (11, 8), 'color': '#F5A623', 'category': 'etl'},
-                '🔄 Transform\n& Clean': {'pos': (14, 8), 'color': '#F5A623', 'category': 'etl'},
-                '💾 Load to\nDestination': {'pos': (17, 8), 'color': '#50E3C2', 'category': 'storage'},
-                '✅ Success\nNotification': {'pos': (20, 9), 'color': '#7ED321', 'category': 'success'},
-                '❌ Error\nHandling': {'pos': (14, 6), 'color': '#D0021B', 'category': 'error'},
-                '🔄 Retry\nMechanism': {'pos': (11, 6), 'color': '#F5A623', 'category': 'retry'},
-                '🚨 Alert\nSystem': {'pos': (20, 6), 'color': '#D0021B', 'category': 'error'}
-            }
-            
-            # Add enhanced nodes with rounded rectangles and gradients
-            for node, config in nodes.items():
-                x, y = config['pos']
-                color = config['color']
+            # Create Netflix-style architecture diagram
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #2D3748, #4A5568); padding: 30px; border-radius: 15px; margin: 20px 0; border: 2px solid #E2E8F0;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <div style="background: #F7FAFC; padding: 15px 30px; border-radius: 25px; display: inline-block; border: 2px solid white;">
+                        <h2 style="color: #2D3748; font-size: 24px; margin: 0; font-weight: bold;">
+                            BATCH DATA INGESTION
+                        </h2>
+                    </div>
+                </div>
                 
-                # Create rounded rectangle with shadow effect
-                fig_batch.add_shape(
-                    type="rect",
-                    x0=x-1.2, y0=y-0.6, x1=x+1.2, y1=y+0.6,
-                    fillcolor=color,
-                    line=dict(color='white', width=3),
-                    layer="below"
-                )
+                <!-- Data Sources Row -->
+                <div style="display: flex; justify-content: center; margin: 30px 0;">
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #4299E1; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Database</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">🗄️</div>
+                            <div style="color: #BEE3F8; font-size: 12px;">PostgreSQL</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #4299E1; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Files</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">📄</div>
+                            <div style="color: #BEE3F8; font-size: 12px;">CSV/JSON</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #4299E1; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">APIs</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">🌐</div>
+                            <div style="color: #BEE3F8; font-size: 12px;">REST</div>
+                        </div>
+                    </div>
+                </div>
                 
-                # Add shadow effect
-                fig_batch.add_shape(
-                    type="rect",
-                    x0=x-1.15, y0=y-0.55, x1=x+1.25, y1=y+0.65,
-                    fillcolor='rgba(0,0,0,0.1)',
-                    line=dict(color='rgba(0,0,0,0)', width=0),
-                    layer="below"
-                )
+                <!-- Orchestration Layer -->
+                <div style="text-align: center; margin: 40px 0;">
+                    <div style="background: #48BB78; padding: 25px 40px; border-radius: 8px; display: inline-block; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                        <div style="color: white; font-weight: bold; font-size: 16px; margin-bottom: 5px;">Orchestration</div>
+                        <div style="color: white; font-size: 24px; margin: 8px 0;">⚙️</div>
+                        <div style="color: #C6F6D5; font-size: 14px;">Apache Airflow</div>
+                    </div>
+                </div>
                 
-                # Add text with better formatting
-                fig_batch.add_annotation(
-                    x=x, y=y, 
-                    text=node, 
-                    showarrow=False, 
-                    font=dict(size=11, color='white', family="Arial Black"),
-                    align="center"
-                )
-            
-            # Add enhanced arrows with better styling
-            connections = [
-                ('📊 Data\nSources', '⏰ Scheduler\n(Cron/Airflow)'),
-                ('⏰ Scheduler\n(Cron/Airflow)', '⬇️ Extract\nProcess'),
-                ('⬇️ Extract\nProcess', '✅ Data\nValidation'),
-                ('✅ Data\nValidation', '🔄 Transform\n& Clean'),
-                ('🔄 Transform\n& Clean', '💾 Load to\nDestination'),
-                ('💾 Load to\nDestination', '✅ Success\nNotification'),
-                ('✅ Data\nValidation', '❌ Error\nHandling'),
-                ('🔄 Transform\n& Clean', '❌ Error\nHandling'),
-                ('💾 Load to\nDestination', '❌ Error\nHandling'),
-                ('❌ Error\nHandling', '🔄 Retry\nMechanism'),
-                ('🔄 Retry\nMechanism', '🔄 Transform\n& Clean'),
-                ('❌ Error\nHandling', '🚨 Alert\nSystem')
-            ]
-            
-            for start, end in connections:
-                x0, y0 = nodes[start]['pos']
-                x1, y1 = nodes[end]['pos']
+                <!-- ETL Pipeline Row -->
+                <div style="display: flex; justify-content: center; margin: 30px 0;">
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #ED8936; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Extract</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">📥</div>
+                            <div style="color: #FEEBC8; font-size: 12px;">Python</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #ED8936; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Transform</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">⚡</div>
+                            <div style="color: #FEEBC8; font-size: 12px;">Spark</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin: 0 15px;">
+                        <div style="background: #ED8936; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 120px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Load</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">📤</div>
+                            <div style="color: #FEEBC8; font-size: 12px;">Warehouse</div>
+                        </div>
+                    </div>
+                </div>
                 
-                # Add curved arrows with better styling
-                fig_batch.add_annotation(
-                    ax=x0+1.2 if x1 > x0 else x0-1.2,
-                    ay=y0,
-                    x=x1-1.2 if x1 > x0 else x1+1.2,
-                    y=y1,
-                    arrowhead=2,
-                    arrowsize=1.5,
-                    arrowwidth=3,
-                    arrowcolor='#333333'
-                )
-            
-            fig_batch.update_layout(
-                title={
-                    'text': "🔄 BATCH DATA INGESTION ARCHITECTURE",
-                    'x': 0.5,
-                    'font': {'size': 20, 'color': '#333333', 'family': 'Arial Black'}
-                },
-                xaxis=dict(range=[0, 22], showgrid=False, showticklabels=False, zeroline=False),
-                yaxis=dict(range=[4, 11], showgrid=False, showticklabels=False, zeroline=False),
-                height=600,
-                showlegend=False,
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(248,249,250,1)'
-            )
-            st.plotly_chart(fig_batch, use_container_width=True)
+                <!-- Storage & Monitoring Row -->
+                <div style="display: flex; justify-content: center; margin: 30px 0;">
+                    <div style="text-align: center; margin: 0 20px;">
+                        <div style="background: #38B2AC; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 140px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Storage</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">🏢</div>
+                            <div style="color: #B2F5EA; font-size: 12px;">Snowflake</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin: 0 20px;">
+                        <div style="background: #805AD5; padding: 20px; border-radius: 8px; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 140px;">
+                            <div style="color: white; font-weight: bold; font-size: 14px; margin-bottom: 5px;">Monitoring</div>
+                            <div style="color: white; font-size: 20px; margin: 8px 0;">📊</div>
+                            <div style="color: #E9D8FD; font-size: 12px;">Grafana</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
             # Add process explanation
             st.markdown("""
@@ -2963,26 +3113,748 @@ def show_big_data_scaling():
 
 def show_company_case_study(company):
     st.markdown("---")
-    st.subheader(f"📋 Case Study: {company}")
+    st.subheader(f"📋 Interactive Case Study: {company}")
+    
+    # Initialize database connection
+    conn = create_company_database()
     
     if "Amazon" in company:
         st.markdown("""
-        ### 🛒 Amazon's Data Architecture
-        - **Scale:** Millions of products, billions of events daily
-        - **Ingestion:** Kinesis for real-time, S3 for batch
-        - **Storage:** DynamoDB (OLTP), Redshift (OLAP)
-        - **Processing:** EMR for batch, Lambda for real-time
+        ### 🛒 Amazon's E-commerce Data Architecture
+        **Scale:** Millions of products, billions of transactions daily  
+        **Real-time Requirements:** Inventory, recommendations, fraud detection
         """)
+        
+        # Load Amazon data from SQLite
+        df = pd.read_sql_query("SELECT * FROM amazon_sales LIMIT 1000", conn)
+        
+        st.markdown("#### 📊 Sales Analytics Dashboard")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Orders", f"{len(df):,}")
+        with col2:
+            st.metric("Total Revenue", f"${df['order_value'].sum():,.2f}")
+        with col3:
+            st.metric("Avg Order Value", f"${df['order_value'].mean():.2f}")
+        with col4:
+            st.metric("Prime Members", f"{(df['prime_member'].sum()/len(df)*100):.1f}%")
+            
+        # Interactive Charts
+        tab1, tab2, tab3 = st.tabs(["📈 Sales Trends", "🏷️ Categories", "🚚 Shipping Analysis"])
+        
+        with tab1:
+            # Sales over time
+            daily_sales = df.groupby(df['order_date'].dt.date)['order_value'].agg(['sum', 'count']).reset_index()
+            fig = px.line(daily_sales, x='order_date', y='sum', title='Daily Sales Revenue',
+                         labels={'sum': 'Revenue ($)', 'order_date': 'Date'})
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab2:
+            # Category analysis
+            cat_analysis = df.groupby('product_category')['order_value'].agg(['sum', 'mean', 'count']).reset_index()
+            fig = px.bar(cat_analysis, x='product_category', y='sum', title='Revenue by Category',
+                        labels={'sum': 'Total Revenue ($)', 'product_category': 'Category'})
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Pie chart for order distribution
+            fig_pie = px.pie(cat_analysis, values='count', names='product_category', 
+                           title='Order Distribution by Category')
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        with tab3:
+            # Shipping analysis
+            shipping_stats = df.groupby('shipping_speed')['delivery_days'].agg(['mean', 'count']).reset_index()
+            fig = px.bar(shipping_stats, x='shipping_speed', y='mean', title='Average Delivery Days by Shipping Type')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # Raw data preview
+        with st.expander("🔍 View Raw Data Sample"):
+            st.dataframe(df.head(100))
+            
     elif "Netflix" in company:
         st.markdown("""
-        ### 🎬 Netflix's Data Architecture  
-        - **Scale:** 200M+ subscribers, petabytes of data
-        - **Ingestion:** Kafka for streaming events
-        - **Storage:** S3 data lake, Cassandra for metadata
-        - **Processing:** Spark for batch, Flink for streaming
+        ### 🎬 Netflix's Streaming Data Architecture
+        **Scale:** 260M+ subscribers worldwide, petabytes of viewing data
+        **Real-time Requirements:** Recommendations, content delivery, user experience
         """)
+        
+        # Load Netflix data from SQLite  
+        df = pd.read_sql_query("SELECT * FROM netflix_viewership LIMIT 1000", conn)
+        
+        st.markdown("#### 🎭 Viewership Analytics Dashboard")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Views", f"{len(df):,}")
+        with col2:
+            st.metric("Avg Watch Time", f"{df['watch_duration_min'].mean():.0f} min")
+        with col3:
+            st.metric("Avg Completion", f"{df['completion_rate'].mean():.1%}")
+        with col4:
+            st.metric("Avg Rating", f"{df['rating'].mean():.1f}/5")
+            
+        # Interactive Charts
+        tab1, tab2, tab3 = st.tabs(["📺 Content Performance", "🌍 Regional Insights", "📱 Device Analytics"])
+        
+        with tab1:
+            # Most watched content
+            content_stats = df.groupby('title')['watch_duration_min'].agg(['sum', 'mean', 'count']).reset_index()
+            content_stats = content_stats.sort_values('sum', ascending=False).head(10)
+            fig = px.bar(content_stats, x='title', y='sum', title='Top 10 Most Watched Shows (Total Minutes)')
+            fig.update_xaxis(tickangle=45)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Genre popularity
+            genre_stats = df.groupby('genre')['watch_duration_min'].sum().reset_index()
+            fig = px.pie(genre_stats, values='watch_duration_min', names='genre', title='Content Consumption by Genre')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab2:
+            # Regional analysis
+            region_stats = df.groupby('region')['watch_duration_min'].agg(['sum', 'mean']).reset_index()
+            fig = px.bar(region_stats, x='region', y='sum', title='Total Watch Time by Region')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab3:
+            # Device preferences
+            device_stats = df.groupby('device_type')['completion_rate'].mean().reset_index()
+            fig = px.bar(device_stats, x='device_type', y='completion_rate', 
+                        title='Average Completion Rate by Device Type')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # Raw data preview
+        with st.expander("🔍 View Raw Data Sample"):
+            st.dataframe(df.head(100))
+            
+    elif "Uber" in company:
+        st.markdown("""
+        ### 🚗 Uber's Mobility Data Architecture
+        **Scale:** 5B+ rides annually, real-time matching across 70+ countries
+        **Real-time Requirements:** Driver-rider matching, dynamic pricing, ETA prediction
+        """)
+        
+        # Load Uber data from SQLite
+        df = pd.read_sql_query("SELECT * FROM uber_rides LIMIT 1000", conn)
+        
+        st.markdown("#### 🚕 Ride Analytics Dashboard")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Rides", f"{len(df):,}")
+        with col2:
+            st.metric("Total Revenue", f"${(df['fare_amount'] + df['tip_amount']).sum():,.2f}")
+        with col3:
+            st.metric("Avg Ride Distance", f"{df['distance_miles'].mean():.1f} mi")
+        with col4:
+            st.metric("Avg Driver Rating", f"{df['driver_rating'].mean():.1f}/5")
+            
+        # Interactive Charts
+        tab1, tab2, tab3 = st.tabs(["🚗 Ride Patterns", "💰 Revenue Analysis", "⭐ Quality Metrics"])
+        
+        with tab1:
+            # Ride type distribution
+            ride_type_stats = df.groupby('ride_type')['fare_amount'].agg(['sum', 'count', 'mean']).reset_index()
+            fig = px.bar(ride_type_stats, x='ride_type', y='count', title='Rides by Service Type')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # City performance
+            city_stats = df.groupby('city')['distance_miles'].agg(['mean', 'count']).reset_index()
+            fig = px.scatter(city_stats, x='mean', y='count', size='count', text='city',
+                           title='Average Distance vs Volume by City')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab2:
+            # Surge pricing impact
+            surge_revenue = df.groupby('surge_multiplier')['fare_amount'].agg(['mean', 'count']).reset_index()
+            fig = px.bar(surge_revenue, x='surge_multiplier', y='mean', title='Average Fare by Surge Multiplier')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab3:
+            # Rating distribution
+            fig = px.histogram(df, x='rider_rating', title='Rider Rating Distribution')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # Raw data preview
+        with st.expander("🔍 View Raw Data Sample"):
+            st.dataframe(df.head(100))
+            
+    elif "NYSE" in company:
+        st.markdown("""
+        ### 💰 NYSE Trading Data Architecture
+        **Scale:** 2,400+ listed companies, billions in daily volume
+        **Real-time Requirements:** Trade execution, price discovery, market surveillance
+        """)
+        
+        # Load NYSE data from SQLite
+        df = pd.read_sql_query("SELECT * FROM nyse_trades LIMIT 1000", conn)
+        
+        st.markdown("#### 📈 Market Analytics Dashboard")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Trades", f"{len(df):,}")
+        with col2:
+            st.metric("Total Volume", f"{df['volume'].sum():,}")
+        with col3:
+            st.metric("Avg Trade Price", f"${df['price'].mean():.2f}")
+        with col4:
+            st.metric("Market Cap", f"${df['market_cap_billion'].mean():.1f}B")
+            
+        # Interactive Charts
+        tab1, tab2, tab3 = st.tabs(["📊 Market Overview", "🏢 Sector Analysis", "📈 Price Movements"])
+        
+        with tab1:
+            # Top symbols by volume
+            symbol_stats = df.groupby('symbol')['volume'].agg(['sum', 'mean']).reset_index()
+            symbol_stats = symbol_stats.sort_values('sum', ascending=False).head(10)
+            fig = px.bar(symbol_stats, x='symbol', y='sum', title='Top 10 Symbols by Total Volume')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab2:
+            # Sector performance
+            sector_stats = df.groupby('sector')['price'].agg(['mean', 'count']).reset_index()
+            fig = px.bar(sector_stats, x='sector', y='mean', title='Average Price by Sector')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with tab3:
+            # Price change distribution
+            fig = px.histogram(df, x='day_change_pct', title='Daily Price Change Distribution (%)')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        # Raw data preview  
+        with st.expander("🔍 View Raw Data Sample"):
+            st.dataframe(df.head(100))
+            
     else:
-        st.info(f"Case study for {company} coming soon!")
+        st.info(f"Interactive case study for {company} coming soon!")
+        
+    # Close database connection
+    conn.close()
+
+def show_olap_vs_oltp():
+    st.header("🔍 OLAP vs OLTP")
+    st.markdown("Understanding the differences between analytical and transactional processing")
+    
+    # Main comparison
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        <div style="background: #E8F4FD; padding: 25px; border-radius: 15px; border-left: 5px solid #2B6CB0;">
+            <h3 style="color: #2B6CB0; margin-top: 0;">🏦 OLTP - Online Transaction Processing</h3>
+            <p><strong>Purpose:</strong> Handle day-to-day transactions</p>
+            <p><strong>Focus:</strong> INSERT, UPDATE, DELETE operations</p>
+            <p><strong>Response Time:</strong> Milliseconds</p>
+            <p><strong>Data Volume:</strong> Current data, gigabytes</p>
+            <p><strong>Users:</strong> Many concurrent users</p>
+            <p><strong>Schema:</strong> Highly normalized (3NF)</p>
+            <p><strong>Examples:</strong> Banking, E-commerce, CRM</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col2:
+        st.markdown("""
+        <div style="background: #F0FDF4; padding: 25px; border-radius: 15px; border-left: 5px solid #16A34A;">
+            <h3 style="color: #16A34A; margin-top: 0;">📊 OLAP - Online Analytical Processing</h3>
+            <p><strong>Purpose:</strong> Support business intelligence and analytics</p>
+            <p><strong>Focus:</strong> SELECT operations, complex queries</p>
+            <p><strong>Response Time:</strong> Seconds to minutes</p>
+            <p><strong>Data Volume:</strong> Historical data, terabytes</p>
+            <p><strong>Users:</strong> Few concurrent users</p>
+            <p><strong>Schema:</strong> Denormalized (star/snowflake)</p>
+            <p><strong>Examples:</strong> Data warehousing, BI, reporting</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Interactive comparison table
+    st.subheader("📋 Detailed Comparison")
+    
+    comparison_data = pd.DataFrame({
+        'Aspect': ['Primary Function', 'Query Complexity', 'Data Freshness', 'Storage Optimization', 
+                  'Typical Users', 'Performance Metric', 'Backup Strategy', 'Indexing Strategy'],
+        'OLTP': ['Transaction Processing', 'Simple queries', 'Real-time/Current', 'Write-optimized', 
+                'End users, Applications', 'Throughput (TPS)', 'Frequent, point-in-time', 'Selective indexing'],
+        'OLAP': ['Data Analysis', 'Complex analytical queries', 'Historical/Batch updated', 'Read-optimized',
+                'Analysts, Data Scientists', 'Query performance', 'Less frequent, full backups', 'Extensive indexing']
+    })
+    
+    st.dataframe(comparison_data, use_container_width=True)
+    
+    # Real-world examples with interactive charts
+    st.subheader("🏢 Real-World Implementation Examples")
+    
+    tab1, tab2, tab3 = st.tabs(["Banking System", "E-commerce Platform", "Healthcare System"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 🏦 Banking OLTP")
+            st.markdown("""
+            - **Account transactions**: Deposits, withdrawals, transfers
+            - **ATM operations**: Balance inquiries, cash withdrawals
+            - **Online banking**: Bill payments, account management
+            - **Credit card processing**: Authorization, settlement
+            """)
+            
+            # Sample transaction volume chart
+            banking_data = pd.DataFrame({
+                'Hour': range(24),
+                'Transactions': [120, 80, 60, 40, 35, 45, 180, 320, 450, 380, 
+                               420, 480, 520, 500, 460, 520, 580, 640, 580, 480, 380, 280, 200, 160]
+            })
+            fig_banking = px.bar(banking_data, x='Hour', y='Transactions',
+                               title='Daily Transaction Volume Pattern')
+            st.plotly_chart(fig_banking, use_container_width=True)
+        
+        with col2:
+            st.markdown("### 📊 Banking OLAP")
+            st.markdown("""
+            - **Risk analysis**: Credit scoring, fraud detection
+            - **Customer analytics**: Behavior patterns, segmentation
+            - **Regulatory reporting**: Compliance, audit reports
+            - **Business intelligence**: KPIs, trends, forecasting
+            """)
+            
+            # Sample analytical query performance
+            query_data = pd.DataFrame({
+                'Query Type': ['Risk Assessment', 'Customer Segmentation', 'Fraud Detection', 'Regulatory Report'],
+                'Avg Response (s)': [15, 45, 8, 120],
+                'Data Processed (GB)': [50, 200, 25, 500]
+            })
+            fig_queries = px.scatter(query_data, x='Avg Response (s)', y='Data Processed (GB)',
+                                   size='Data Processed (GB)', color='Query Type',
+                                   title='Analytical Query Performance')
+            st.plotly_chart(fig_queries, use_container_width=True)
+    
+    with tab2:
+        st.markdown("### 🛒 E-commerce System Architecture")
+        
+        # Netflix-style architecture for e-commerce
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea, #764ba2); padding: 25px; border-radius: 15px; color: white;">
+            <h4 style="text-align: center; margin-bottom: 20px;">E-COMMERCE DATA ARCHITECTURE</h4>
+            
+            <div style="display: flex; justify-content: space-between; margin: 20px 0;">
+                <div style="text-align: center;">
+                    <div style="background: #4299E1; padding: 15px; border-radius: 8px; margin: 10px;">
+                        <div style="font-weight: bold;">OLTP Layer</div>
+                        <div style="font-size: 24px; margin: 10px 0;">🏪</div>
+                        <div style="font-size: 12px;">
+                            • Order Processing<br>
+                            • Inventory Management<br>
+                            • User Authentication<br>
+                            • Payment Processing
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="text-align: center;">
+                    <div style="background: #48BB78; padding: 15px; border-radius: 8px; margin: 10px;">
+                        <div style="font-weight: bold;">ETL Pipeline</div>
+                        <div style="font-size: 24px; margin: 10px 0;">🔄</div>
+                        <div style="font-size: 12px;">
+                            • Data Extraction<br>
+                            • Transformation<br>
+                            • Data Quality<br>
+                            • Loading
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="text-align: center;">
+                    <div style="background: #ED8936; padding: 15px; border-radius: 8px; margin: 10px;">
+                        <div style="font-weight: bold;">OLAP Layer</div>
+                        <div style="font-size: 24px; margin: 10px 0;">📊</div>
+                        <div style="font-size: 12px;">
+                            • Sales Analytics<br>
+                            • Customer Insights<br>
+                            • Product Performance<br>
+                            • Forecasting
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with tab3:
+        st.markdown("### 🏥 Healthcare System")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **OLTP Applications:**
+            - Patient registration and scheduling
+            - Electronic health records (EHR)
+            - Prescription management
+            - Billing and insurance processing
+            """)
+            
+        with col2:
+            st.markdown("""
+            **OLAP Applications:**
+            - Population health analytics
+            - Treatment outcome analysis
+            - Resource utilization reporting
+            - Predictive health modeling
+            """)
+    
+    # Performance optimization tips
+    st.subheader("⚡ Performance Optimization")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        ### 🏦 OLTP Optimization
+        - **Indexing**: Create selective indexes on frequently queried columns
+        - **Normalization**: Use 3NF to reduce data redundancy
+        - **Connection pooling**: Manage database connections efficiently
+        - **Caching**: Implement application-level caching
+        - **Partitioning**: Partition large tables by time or key ranges
+        """)
+        
+    with col2:
+        st.markdown("""
+        ### 📊 OLAP Optimization
+        - **Denormalization**: Use star/snowflake schemas for faster queries
+        - **Materialized views**: Pre-compute common aggregations
+        - **Columnar storage**: Use column-oriented databases
+        - **Data compression**: Compress historical data
+        - **Parallel processing**: Leverage MPP architectures
+        """)
+
+def show_data_science_analytics():
+    st.header("🧠 Data Science & Analytics")
+    st.markdown("Explore machine learning pipelines and advanced analytics use cases")
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Use Cases", "🤖 ML Pipelines", "🔮 Predictive Analytics", "📊 Business Analytics"])
+    
+    with tab1:
+        st.subheader("🎯 Data Science Applications")
+        
+        # Create interactive use case explorer
+        use_case = st.selectbox("Choose a use case to explore:", [
+            "Recommendation Systems",
+            "Risk Analysis", 
+            "Customer Churn Analysis",
+            "Credit Risk Management",
+            "Portfolio Management",
+            "Fraud Detection",
+            "Demand Forecasting"
+        ])
+        
+        if use_case == "Recommendation Systems":
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown("""
+                ### 🎬 Netflix-Style Recommendation Engine
+                
+                **Architecture Components:**
+                - **Data Collection**: User interactions, viewing history, ratings
+                - **Feature Engineering**: User profiles, content features, context
+                - **Model Training**: Collaborative filtering, content-based, hybrid
+                - **Real-time Serving**: Low-latency prediction API
+                - **A/B Testing**: Continuous experimentation and optimization
+                """)
+                
+                # Recommendation performance metrics
+                rec_metrics = pd.DataFrame({
+                    'Algorithm': ['Collaborative Filtering', 'Content-Based', 'Matrix Factorization', 'Deep Learning'],
+                    'Precision': [0.75, 0.68, 0.82, 0.88],
+                    'Recall': [0.65, 0.72, 0.79, 0.85],
+                    'Training Time (hrs)': [2, 1, 8, 24]
+                })
+                
+                fig_rec = px.scatter(rec_metrics, x='Precision', y='Recall', 
+                                   size='Training Time (hrs)', color='Algorithm',
+                                   title='Recommendation Algorithm Performance')
+                st.plotly_chart(fig_rec, use_container_width=True)
+            
+            with col2:
+                st.markdown("""
+                **Tech Stack:**
+                - **Spark**: Batch processing
+                - **Kafka**: Real-time events
+                - **Redis**: Caching recommendations
+                - **TensorFlow**: Deep learning models
+                - **Kubernetes**: Model serving
+                """)
+                
+                # Sample recommendation results
+                st.markdown("**Sample Output:**")
+                recommendations = pd.DataFrame({
+                    'User': ['User_123', 'User_456'],
+                    'Top_Recommendation': ['Stranger Things', 'The Crown'],
+                    'Confidence': [0.92, 0.87]
+                })
+                st.dataframe(recommendations, use_container_width=True)
+        
+        elif use_case == "Customer Churn Analysis":
+            st.markdown("""
+            ### 📱 Telecom Customer Churn Prediction
+            
+            **Business Problem:** Predict which customers are likely to cancel their subscription
+            
+            **Data Sources:**
+            - Customer demographics and account information
+            - Usage patterns (call duration, data usage, SMS)
+            - Service interactions and support tickets
+            - Payment history and billing data
+            """)
+            
+            # Churn analysis visualization
+            churn_data = pd.DataFrame({
+                'Month': pd.date_range('2024-01-01', periods=12, freq='M'),
+                'Churn_Rate': [0.05, 0.04, 0.06, 0.08, 0.07, 0.09, 0.11, 0.10, 0.08, 0.07, 0.06, 0.05],
+                'Predicted_Churn': [0.052, 0.045, 0.058, 0.075, 0.072, 0.085, 0.095, 0.098, 0.082, 0.071, 0.063, 0.054]
+            })
+            
+            fig_churn = px.line(churn_data, x='Month', y=['Churn_Rate', 'Predicted_Churn'],
+                              title='Actual vs Predicted Churn Rate')
+            st.plotly_chart(fig_churn, use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("""
+                **Key Features:**
+                - Contract length and type
+                - Average monthly spending
+                - Service usage patterns
+                - Customer service interactions
+                - Payment method and history
+                """)
+            
+            with col2:
+                st.markdown("""
+                **Business Impact:**
+                - 15% reduction in churn rate
+                - $2.3M annual revenue retention
+                - 85% model accuracy
+                - 30% improvement in campaign targeting
+                """)
+        
+        elif use_case == "Credit Risk Management":
+            st.markdown("""
+            ### 🏦 Banking Credit Risk Assessment
+            
+            **Objective:** Assess the probability of loan default and set appropriate interest rates
+            """)
+            
+            # Credit risk visualization
+            risk_data = pd.DataFrame({
+                'Credit_Score': [300, 400, 500, 600, 700, 800, 850],
+                'Default_Rate': [0.45, 0.25, 0.15, 0.08, 0.04, 0.02, 0.01],
+                'Loan_Volume': [1000, 2500, 8000, 15000, 25000, 18000, 5000]
+            })
+            
+            fig_risk = px.scatter(risk_data, x='Credit_Score', y='Default_Rate',
+                                size='Loan_Volume', title='Credit Score vs Default Rate')
+            st.plotly_chart(fig_risk, use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("""
+                **Risk Factors:**
+                - Credit history and score
+                - Debt-to-income ratio
+                - Employment stability
+                - Collateral value
+                - Economic indicators
+                """)
+            
+            with col2:
+                st.markdown("""
+                **Model Outputs:**
+                - Probability of default (PD)
+                - Loss given default (LGD)
+                - Exposure at default (EAD)
+                - Risk-adjusted pricing
+                """)
+    
+    with tab2:
+        st.subheader("🤖 Machine Learning Pipeline Architecture")
+        
+        # ML Pipeline visualization
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #ff6b6b, #ee5a24); padding: 25px; border-radius: 15px; color: white; margin: 20px 0;">
+            <h4 style="text-align: center; margin-bottom: 20px;">ML PIPELINE ARCHITECTURE</h4>
+            
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0;">
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Data Ingestion</div>
+                        <div style="font-size: 20px; margin: 10px 0;">📥</div>
+                        <div style="font-size: 12px;">Kafka, Kinesis</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Feature Store</div>
+                        <div style="font-size: 20px; margin: 10px 0;">🗃️</div>
+                        <div style="font-size: 12px;">Feast, Tecton</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Model Training</div>
+                        <div style="font-size: 20px; margin: 10px 0;">🧠</div>
+                        <div style="font-size: 12px;">MLflow, Kubeflow</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Model Serving</div>
+                        <div style="font-size: 20px; margin: 10px 0;">🚀</div>
+                        <div style="font-size: 12px;">Seldon, KFServing</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 20px;">
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Monitoring</div>
+                        <div style="font-size: 20px; margin: 10px 0;">📊</div>
+                        <div style="font-size: 12px;">Evidently, Grafana</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Experiment Tracking</div>
+                        <div style="font-size: 20px; margin: 10px 0;">📝</div>
+                        <div style="font-size: 12px;">MLflow, W&B</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                        <div style="font-weight: bold;">Model Registry</div>
+                        <div style="font-size: 20px; margin: 10px 0;">🏛️</div>
+                        <div style="font-size: 12px;">MLflow, DVC</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # MLOps maturity levels
+        st.subheader("📈 MLOps Maturity Levels")
+        
+        maturity_levels = pd.DataFrame({
+            'Level': ['Level 0: Manual', 'Level 1: ML Pipeline', 'Level 2: CI/CD Pipeline'],
+            'Characteristics': [
+                'Manual, script-driven process',
+                'Automated training pipeline',
+                'Automated CI/CD system'
+            ],
+            'Deployment': ['Manual', 'Automated training', 'Rapid and reliable'],
+            'Monitoring': ['Limited', 'Basic metrics', 'Comprehensive']
+        })
+        
+        st.dataframe(maturity_levels, use_container_width=True)
+    
+    with tab3:
+        st.subheader("🔮 Predictive Analytics Use Cases")
+        
+        prediction_type = st.selectbox("Choose prediction type:", [
+            "Demand Forecasting",
+            "Price Optimization", 
+            "Maintenance Prediction",
+            "Market Trend Analysis"
+        ])
+        
+        if prediction_type == "Demand Forecasting":
+            st.markdown("""
+            ### 📦 Supply Chain Demand Forecasting
+            
+            **Business Challenge:** Optimize inventory levels while minimizing stockouts
+            """)
+            
+            # Generate demand forecasting data
+            dates = pd.date_range('2024-01-01', periods=365, freq='D')
+            base_demand = 1000
+            seasonal = 200 * np.sin(2 * np.pi * np.arange(365) / 365)
+            trend = np.arange(365) * 0.5
+            noise = np.random.normal(0, 50, 365)
+            
+            demand_data = pd.DataFrame({
+                'Date': dates,
+                'Actual_Demand': base_demand + seasonal + trend + noise,
+                'Predicted_Demand': base_demand + seasonal + trend + np.random.normal(0, 25, 365)
+            })
+            
+            fig_demand = px.line(demand_data, x='Date', y=['Actual_Demand', 'Predicted_Demand'],
+                               title='Demand Forecasting: Actual vs Predicted')
+            st.plotly_chart(fig_demand, use_container_width=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("""
+                **Features Used:**
+                - Historical demand patterns
+                - Seasonal trends
+                - Economic indicators
+                - Marketing campaigns
+                - Weather data
+                """)
+            
+            with col2:
+                accuracy_metrics = pd.DataFrame({
+                    'Metric': ['MAPE', 'RMSE', 'MAE'],
+                    'Value': ['8.5%', '45.2', '32.1'],
+                    'Target': ['<10%', '<50', '<35']
+                })
+                st.dataframe(accuracy_metrics, use_container_width=True)
+    
+    with tab4:
+        st.subheader("📊 Business Analytics Dashboard")
+        
+        # Generate business metrics
+        business_metrics = pd.DataFrame({
+            'KPI': ['Customer Acquisition Cost', 'Customer Lifetime Value', 'Conversion Rate', 'Retention Rate'],
+            'Current': [150, 1200, 3.2, 85.5],
+            'Target': [120, 1500, 4.0, 90.0],
+            'Unit': ['$', '$', '%', '%']
+        })
+        
+        # Create metrics visualization
+        fig_kpi = go.Figure()
+        fig_kpi.add_trace(go.Bar(x=business_metrics['KPI'], y=business_metrics['Current'], 
+                               name='Current', marker_color='lightblue'))
+        fig_kpi.add_trace(go.Bar(x=business_metrics['KPI'], y=business_metrics['Target'], 
+                               name='Target', marker_color='orange'))
+        fig_kpi.update_layout(title='Key Performance Indicators', barmode='group')
+        st.plotly_chart(fig_kpi, use_container_width=True)
+        
+        # Real-time metrics simulation
+        st.markdown("### 📈 Real-time Analytics Simulation")
+        if st.button("Generate Real-time Data"):
+            metrics_placeholder = st.empty()
+            for i in range(10):
+                current_metrics = {
+                    'Active Users': np.random.randint(8500, 12000),
+                    'Revenue Today': np.random.randint(45000, 65000),
+                    'Conversion Rate': round(np.random.uniform(2.8, 4.2), 2),
+                    'Avg Session Duration': f"{np.random.randint(8, 15)}min {np.random.randint(10, 59)}s"
+                }
+                
+                with metrics_placeholder.container():
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Active Users", current_metrics['Active Users'])
+                    with col2:
+                        st.metric("Revenue Today", f"${current_metrics['Revenue Today']:,}")
+                    with col3:
+                        st.metric("Conversion Rate", f"{current_metrics['Conversion Rate']}%")
+                    with col4:
+                        st.metric("Avg Session", current_metrics['Avg Session Duration'])
+                
+                import time
+                time.sleep(1)
 
 if __name__ == "__main__":
     main()
