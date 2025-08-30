@@ -32,10 +32,10 @@ def generate_sample_data():
         'success': np.random.choice([True, False], n_records, p=[0.95, 0.05])
     })
 
-@st.cache_data
+@st.cache_resource
 def create_company_database():
     """Create SQLite database with company synthetic datasets"""
-    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    conn = sqlite3.connect('company_data.db', check_same_thread=False)
     
     # Netflix Data
     netflix_data = generate_netflix_data()
@@ -170,6 +170,76 @@ def generate_nyse_data():
     
     return pd.DataFrame(data)
 
+def show_company_eda(company_name, conn):
+    """Display EDA for a given company."""
+    st.subheader(f"🏢 {company_name} Synthetic Data & EDA")
+
+    table_name = ""
+    if "Amazon" in company_name:
+        table_name = "amazon_sales"
+    elif "Netflix" in company_name:
+        table_name = "netflix_viewership"
+    elif "Uber" in company_name:
+        table_name = "uber_rides"
+    elif "NYSE" in company_name:
+        table_name = "nyse_trades"
+
+    if table_name:
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+            st.dataframe(df.head())
+
+            st.markdown("---")
+            st.subheader("Key Metrics")
+            col1, col2, col3 = st.columns(3)
+
+            if "amazon_sales" == table_name:
+                col1.metric("Total Sales", f"${df['order_value'].sum():,.2f}")
+                col2.metric("Average Order Value", f"${df['order_value'].mean():,.2f}")
+                col3.metric("Total Orders", f"{len(df):,}")
+            elif "netflix_viewership" == table_name:
+                col1.metric("Total Watch Hours", f"{df['watch_duration_min'].sum() / 60:,.0f}")
+                col2.metric("Average Rating", f"{df['rating'].mean():.2f}")
+                col3.metric("Unique Viewers", f"{df['user_id'].nunique():,}")
+            elif "uber_rides" == table_name:
+                col1.metric("Total Rides", f"{len(df):,}")
+                col2.metric("Average Fare", f"${df['fare_amount'].mean():.2f}")
+                col3.metric("Average Distance", f"{df['distance_miles'].mean():.2f} miles")
+            elif "nyse_trades" == table_name:
+                col1.metric("Total Trades", f"{len(df):,}")
+                col2.metric("Total Volume", f"{df['volume'].sum():,}")
+                col3.metric("Average Price", f"${df['price'].mean():.2f}")
+
+            st.markdown("---")
+            st.subheader("Visualizations")
+
+            if "amazon_sales" == table_name:
+                fig1 = px.histogram(df, x="order_value", title="Distribution of Order Value")
+                st.plotly_chart(fig1, use_container_width=True)
+                fig2 = px.bar(df['product_category'].value_counts().reset_index(), x='product_category', y='count', title="Sales by Product Category")
+                st.plotly_chart(fig2, use_container_width=True)
+
+            elif "netflix_viewership" == table_name:
+                fig1 = px.histogram(df, x="watch_duration_min", title="Distribution of Watch Duration")
+                st.plotly_chart(fig1, use_container_width=True)
+                fig2 = px.bar(df['genre'].value_counts().reset_index(), x='genre', y='count', title="Viewership by Genre")
+                st.plotly_chart(fig2, use_container_width=True)
+
+            elif "uber_rides" == table_name:
+                fig1 = px.histogram(df, x="fare_amount", title="Distribution of Fare Amount")
+                st.plotly_chart(fig1, use_container_width=True)
+                fig2 = px.bar(df['ride_type'].value_counts().reset_index(), x='ride_type', y='count', title="Rides by Type")
+                st.plotly_chart(fig2, use_container_width=True)
+
+            elif "nyse_trades" == table_name:
+                fig1 = px.histogram(df, x="price", title="Distribution of Trade Price")
+                st.plotly_chart(fig1, use_container_width=True)
+                fig2 = px.bar(df['symbol'].value_counts().reset_index(), x='symbol', y='count', title="Trades by Symbol")
+                st.plotly_chart(fig2, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Could not load data for {company_name}. Error: {e}")
+
 def main():
     st.title("🏗️ Data Architecture & Engineering Learning Hub")
     st.markdown("---")
@@ -272,7 +342,7 @@ def show_data_ingestion():
     st.header("📥 Data Ingestion")
     st.markdown("Learn about different methods of getting data into your systems")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 Theory", "🛠️ Interactive Demo", "📊 EDA Charts", "🔄 Flow Charts", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📚 Theory", "🛠️ Interactive Demo", "📊 EDA Charts", "🔄 Flow Charts", "🏢 Real Examples", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("Types of Data Ingestion")
@@ -928,14 +998,14 @@ def show_data_ingestion():
                 col1, col2, col3 = st.columns([1, 2, 2])
                 
                 # Display company logo if available
-                logo_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{company}.png"
+                logo_path = f"Pictures/{company}.png"
                 try:
                     with col1:
                         st.image(logo_path, width=80)
                 except:
                     # Fallback to emoji if logo not found
                     try:
-                        logo_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{company}.jpg"
+                        logo_path = f"Pictures/{company}.jpg"
                         with col1:
                             st.image(logo_path, width=80)
                     except:
@@ -948,11 +1018,21 @@ def show_data_ingestion():
                     st.markdown(f"**⚡ Real-time:** {details['realtime']}")
                 st.markdown(f"**🛠️ Tools:** {details['tools']}")
 
+    with tab6:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='ingestion_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
+
 def show_data_storage():
     st.header("💾 Data Storage")
     st.markdown("Explore different storage systems and their use cases")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 Storage Types", "🛠️ Interactive Comparison", "📊 Storage Analytics", "🔄 Storage Flow Charts", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📚 Storage Types", "🛠️ Interactive Comparison", "📊 Storage Analytics", "🔄 Storage Flow Charts", "🏢 Real Examples", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("Types of Data Storage Systems")
@@ -1574,7 +1654,7 @@ def show_data_storage():
                 col1, col2, col3 = st.columns([1, 2, 2])
                 
                 # Display company logo if available
-                logo_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{company}.png"
+                logo_path = f"Pictures/{company}.png"
                 try:
                     with col1:
                         st.image(logo_path, width=80)
@@ -1582,7 +1662,7 @@ def show_data_storage():
                     # Check for NYSE alternative naming
                     if company == "NYSE":
                         try:
-                            logo_path = "/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/nyse-new-york-stock-exchange.png"
+                            logo_path = "Pictures/nyse-new-york-stock-exchange.png"
                             with col1:
                                 st.image(logo_path, width=80)
                         except:
@@ -1591,7 +1671,7 @@ def show_data_storage():
                     else:
                         # Fallback to emoji if logo not found
                         try:
-                            logo_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{company}.jpg"
+                            logo_path = f"Pictures/{company}.jpg"
                             with col1:
                                 st.image(logo_path, width=80)
                         except:
@@ -1605,11 +1685,21 @@ def show_data_storage():
                     st.markdown(f"**🏊 Data Lake:** {storage['lake']}")
                     st.markdown(f"**🏢 Data Warehouse:** {storage['warehouse']}")
 
+    with tab6:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='storage_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
+
 def show_etl_pipelines():
     st.header("🔄 ETL/ELT Pipelines")
     st.markdown("Learn about Extract, Transform, Load processes and orchestration")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 ETL vs ELT", "🛠️ Pipeline Builder", "📊 ETL Analytics", "🔄 ETL Flow Charts", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📚 ETL vs ELT", "🛠️ Pipeline Builder", "📊 ETL Analytics", "🔄 ETL Flow Charts", "🏢 Real Examples", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("ETL vs ELT: What's the difference?")
@@ -2351,11 +2441,21 @@ print("Pipeline completed successfully!")
                 st.markdown(f"**Challenge:** {pipeline['challenge']}")
                 st.markdown(f"**Solution:** {pipeline['solution']}")
 
+    with tab6:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='etl_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
+
 def show_processing_systems():
     st.header("⚡ Processing Systems")
     st.markdown("Learn about batch and stream processing frameworks")
     
-    tab1, tab2, tab3 = st.tabs(["📚 Batch vs Stream", "🛠️ Framework Comparison", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📚 Batch vs Stream", "🛠️ Framework Comparison", "🏢 Real Examples", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("Batch vs Stream Processing")
@@ -2677,11 +2777,21 @@ def show_processing_systems():
                 st.markdown(f"**✅ Pros:** {details['pros']}")
                 st.markdown(f"**❌ Cons:** {details['cons']}")
 
+    with tab4:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='processing_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
+
 def show_big_data_scaling():
     st.header("📊 Big Data & Scaling")
     st.markdown("Understanding the 3 Vs of Big Data and scaling challenges")
     
-    tab1, tab2, tab3 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📚 3 Vs of Big Data", "🛠️ Scaling Strategies", "🏢 Real Examples", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("The 3 Vs of Big Data")
@@ -3111,6 +3221,16 @@ def show_big_data_scaling():
         for tech in tech_stack[selected_layer]:
             st.markdown(f"• {tech}")
 
+    with tab4:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='bigdata_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
+
 def show_company_case_study(company):
     st.markdown("---")
     st.subheader(f"📋 Interactive Case Study: {company}")
@@ -3531,7 +3651,7 @@ def show_data_science_analytics():
     st.header("🧠 Data Science & Analytics")
     st.markdown("Explore machine learning pipelines and advanced analytics use cases")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Use Cases", "🤖 ML Pipelines", "🔮 Predictive Analytics", "📊 Business Analytics"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Use Cases", "🤖 ML Pipelines", "🔮 Predictive Analytics", "📊 Business Analytics", "🔬 Synthetics"])
     
     with tab1:
         st.subheader("🎯 Data Science Applications")
@@ -3855,6 +3975,16 @@ def show_data_science_analytics():
                 
                 import time
                 time.sleep(1)
+
+    with tab5:
+        st.subheader("🔬 Company Synthetics & EDA")
+        conn = create_company_database()
+        company_options = ["Select a company...", "Amazon", "Netflix", "Uber", "NYSE"]
+        selected_company = st.selectbox("Choose a company:", company_options, key='datascience_company')
+
+        if selected_company != "Select a company...":
+            show_company_eda(selected_company, conn)
+        conn.close()
 
 if __name__ == "__main__":
     main()
