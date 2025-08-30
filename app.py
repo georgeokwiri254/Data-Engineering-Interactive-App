@@ -9,6 +9,7 @@ import sqlite3
 from random import choice, randint
 import logging
 import os
+import json
 
 st.set_page_config(
     page_title="Data Architecture & Engineering Learning Hub",
