@@ -6343,14 +6343,18 @@ by sym from ohlc_1min
         evolution_data = pd.DataFrame({
             'Era': ['Traditional ETL\n(2000-2010)', 'Big Data ETL\n(2010-2015)', 'Cloud ETL\n(2015-2020)', 'Modern ELT\n(2020-Present)'],
             'Tools': ['Informatica\nTalend\nSSIS', 'Hadoop\nSpark\nHive', 'AWS Glue\nAzure Data Factory\nDataflow', 'Snowflake\ndbt\nFivetran'],
-            'Scale': ['GBs', 'TBs', 'PBs', 'Exabytes'],
-            'Latency': ['Hours', 'Minutes', 'Seconds', 'Real-time'],
+            'Scale_Label': ['GBs', 'TBs', 'PBs', 'Exabytes'],
+            'Scale_Numeric': [1, 1000, 1000000, 1000000000],  # Relative scale for sizing
+            'Latency_Label': ['Hours', 'Minutes', 'Seconds', 'Real-time'],
+            'Latency_Numeric': [3600, 60, 1, 0.1],  # Latency in seconds for coloring
             'Complexity': [3, 6, 4, 2]
         })
         
-        fig = px.scatter(evolution_data, x='Era', y='Complexity', size='Scale', color='Latency',
+        fig = px.scatter(evolution_data, x='Era', y='Complexity', 
+                        size='Scale_Numeric', color='Latency_Numeric',
+                        hover_data={'Scale_Label': True, 'Latency_Label': True, 'Scale_Numeric': False, 'Latency_Numeric': False},
                         title='ETL Technology Evolution',
-                        labels={'Complexity': 'Implementation Complexity (1-10)'})
+                        labels={'Complexity': 'Implementation Complexity (1-10)', 'Latency_Numeric': 'Processing Latency'})
         st.plotly_chart(fig, use_container_width=True)
         
     with tab5:
