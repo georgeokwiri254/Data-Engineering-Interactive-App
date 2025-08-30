@@ -950,8 +950,11 @@ def populate_module3_data(conn, company_name):
             staging_data = generate_nyse_staging_data(50000)
             manifests_data = generate_nyse_etl_manifests(25)
         
-        # Insert ETL jobs data
-        jobs_data.to_sql('processing_jobs', conn, if_exists='append', index=False, method='multi')
+        # Insert ETL jobs data in chunks to avoid SQLite variable limit
+        chunk_size = 1000  # SQLite default limit is ~999 variables per query
+        for i in range(0, len(jobs_data), chunk_size):
+            chunk = jobs_data.iloc[i:i+chunk_size]
+            chunk.to_sql('processing_jobs', conn, if_exists='append', index=False)
         
         # Insert staging data
         staging_table_map = {
@@ -961,10 +964,14 @@ def populate_module3_data(conn, company_name):
             'Airbnb': 'staging_airbnb_reservations',
             'NYSE': 'staging_nyse_trades'
         }
-        staging_data.to_sql(staging_table_map[company_name], conn, if_exists='append', index=False, method='multi')
+        # Insert staging data in chunks to avoid SQLite variable limit
+        chunk_size = 1000  # SQLite default limit is ~999 variables per query
+        for i in range(0, len(staging_data), chunk_size):
+            chunk = staging_data.iloc[i:i+chunk_size]
+            chunk.to_sql(staging_table_map[company_name], conn, if_exists='append', index=False)
         
-        # Insert manifests data
-        manifests_data.to_sql('etl_manifests', conn, if_exists='append', index=False, method='multi')
+        # Insert manifests data (small dataset, no chunking needed)
+        manifests_data.to_sql('etl_manifests', conn, if_exists='append', index=False)
         
         conn.commit()
         
