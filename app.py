@@ -2222,7 +2222,8 @@ def main():
         "📊 Big Data & Scaling",
         "🔍 OLAP vs OLTP",
         "🧠 Data Science & Analytics",
-        "📊 Control and Logs"
+        "📊 Control and Logs",
+        "📋 Flowcharts"
     ]
     
     # Company case studies section
@@ -2277,6 +2278,9 @@ def main():
         show_data_science_analytics()
     elif selected_module == "📊 Control and Logs":
         show_control_and_logs()
+    elif selected_module == "📋 Flowcharts":
+        log_activity("INFO", "Navigation", "User accessed Flowcharts module")
+        show_flowcharts()
     
     # Show company case study if selected
     if selected_company != "Select a company...":
@@ -9386,6 +9390,296 @@ def show_control_and_logs():
         except Exception as e:
             st.error(f"Error generating analytics: {str(e)}")
             log_activity("ERROR", "Control Panel", f"Analytics generation failed: {str(e)}")
+
+def show_flowcharts():
+    st.header("📋 Flowcharts & Architecture Diagrams")
+    log_activity("INFO", "Flowcharts", "User accessed Flowcharts module")
+    
+    # Create three main subtabs as requested
+    tab1, tab2, tab3 = st.tabs(["🏢 Company Flowcharts", "🏗️ Data Architecture", "🔌 API Designs"])
+    
+    with tab1:
+        st.subheader("🏢 Company Data Flow Diagrams")
+        st.markdown("Interactive flowcharts showing data architecture for major tech companies")
+        
+        # Company selection
+        company_options = ["Amazon", "Netflix", "Uber", "Airbnb"]
+        selected_company = st.selectbox("Select Company:", company_options)
+        
+        # Display appropriate company image based on selection
+        try:
+            if selected_company == "Amazon":
+                # Amazon has multiple options
+                amazon_files = ["Amazon.png", "Amazon1.gif", "Amazon Data lake.pdf"]
+                selected_amazon = st.selectbox("Select Amazon Diagram:", amazon_files)
+                
+                file_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{selected_amazon}"
+                
+                if selected_amazon.endswith('.pdf'):
+                    st.markdown(f"### 📄 {selected_amazon}")
+                    with open(file_path, "rb") as file:
+                        btn = st.download_button(
+                            label="📥 Download Amazon Data Lake PDF",
+                            data=file.read(),
+                            file_name="Amazon_Data_Lake.pdf",
+                            mime="application/pdf"
+                        )
+                    st.info("PDF files cannot be displayed inline. Use the download button above to view the Amazon Data Lake architecture.")
+                else:
+                    st.markdown(f"### 🔄 Amazon Data Architecture - {selected_amazon}")
+                    st.image(file_path, use_container_width=True)
+                    
+            elif selected_company == "Netflix":
+                netflix_files = ["Netflix.jpg", "Netflix Flowchart.jpg"]
+                selected_netflix = st.selectbox("Select Netflix Diagram:", netflix_files)
+                
+                file_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{selected_netflix}"
+                st.markdown(f"### 🎬 Netflix Data Architecture - {selected_netflix}")
+                st.image(file_path, use_container_width=True)
+                
+            elif selected_company == "Uber":
+                uber_files = ["Uber.jpg", "uber2.gif", "uber.bin"]
+                selected_uber = st.selectbox("Select Uber Diagram:", uber_files)
+                
+                file_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{selected_uber}"
+                
+                if selected_uber.endswith('.bin'):
+                    st.markdown(f"### 🚗 {selected_uber}")
+                    st.warning("⚠️ Binary file detected. This file format cannot be displayed as an image.")
+                    
+                    # Show file info
+                    import os
+                    file_size = os.path.getsize(file_path)
+                    st.info(f"File size: {file_size:,} bytes")
+                    
+                    with open(file_path, "rb") as file:
+                        btn = st.download_button(
+                            label="📥 Download Uber Binary File",
+                            data=file.read(),
+                            file_name="uber_data.bin",
+                            mime="application/octet-stream"
+                        )
+                else:
+                    st.markdown(f"### 🚗 Uber Data Architecture - {selected_uber}")
+                    st.image(file_path, use_container_width=True)
+                    
+            elif selected_company == "Airbnb":
+                file_path = "/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/airbnb.gif"
+                st.markdown("### 🏠 Airbnb Data Architecture")
+                st.image(file_path, use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"❌ Error loading {selected_company} diagram: {str(e)}")
+            log_activity("ERROR", "Flowcharts", f"Failed to load {selected_company} diagram: {str(e)}")
+            
+        # Additional company info
+        st.markdown("---")
+        st.markdown("### 📊 Company Data Insights")
+        
+        if selected_company == "Amazon":
+            st.markdown("""
+            **Amazon's Data Architecture highlights:**
+            - **Massive Scale**: Handles billions of customer interactions daily
+            - **Real-time Processing**: Instant recommendations and inventory updates  
+            - **Multi-region Replication**: Global data consistency and disaster recovery
+            - **Machine Learning Integration**: Personalization at every touchpoint
+            """)
+        elif selected_company == "Netflix":
+            st.markdown("""
+            **Netflix's Data Architecture highlights:**
+            - **Content Delivery**: Global CDN with intelligent caching
+            - **Recommendation Engine**: Real-time ML-powered content suggestions
+            - **A/B Testing**: Continuous experimentation on user experience
+            - **Streaming Analytics**: Real-time monitoring of video quality and engagement
+            """)
+        elif selected_company == "Uber":
+            st.markdown("""
+            **Uber's Data Architecture highlights:**
+            - **Real-time Matching**: Sub-second rider-driver matching algorithms
+            - **Geospatial Processing**: Complex location-based routing and pricing
+            - **Demand Forecasting**: ML models predict ride demand patterns
+            - **Dynamic Pricing**: Real-time surge pricing based on supply/demand
+            """)
+        elif selected_company == "Airbnb":
+            st.markdown("""
+            **Airbnb's Data Architecture highlights:**
+            - **Search & Discovery**: ML-powered property recommendations
+            - **Trust & Safety**: Fraud detection and user verification systems
+            - **Pricing Intelligence**: Dynamic pricing suggestions for hosts  
+            - **Experience Personalization**: Custom travel experiences based on preferences
+            """)
+    
+    with tab2:
+        st.subheader("🏗️ Data Architecture Diagrams")
+        st.markdown("Comprehensive data warehousing and architecture patterns")
+        
+        # Data Architecture file
+        file_path = "/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/datawarehousing.bin"
+        
+        st.markdown("### 🏛️ Data Warehousing Architecture")
+        
+        try:
+            import os
+            file_size = os.path.getsize(file_path)
+            st.info(f"📁 File: datawarehousing.bin | Size: {file_size:,} bytes")
+            
+            st.warning("⚠️ This appears to be a binary data file containing data warehousing architecture information.")
+            
+            # Provide download option
+            with open(file_path, "rb") as file:
+                btn = st.download_button(
+                    label="📥 Download Data Warehousing Architecture File",
+                    data=file.read(),
+                    file_name="datawarehousing_architecture.bin",
+                    mime="application/octet-stream"
+                )
+                
+            # Try to read first few bytes to determine file type
+            with open(file_path, "rb") as f:
+                first_bytes = f.read(100)
+                
+            st.markdown("### 🔍 File Analysis")
+            st.code(f"First 100 bytes (hex): {first_bytes.hex()}")
+            
+            # Check if it might be a compressed or encoded image
+            if first_bytes[:4] == b'\x89PNG':
+                st.success("✅ Detected PNG image format!")
+                st.image(file_path, use_container_width=True)
+            elif first_bytes[:3] == b'GIF':
+                st.success("✅ Detected GIF image format!")  
+                st.image(file_path, use_container_width=True)
+            elif first_bytes[:4] in [b'\xff\xd8\xff\xe0', b'\xff\xd8\xff\xe1']:
+                st.success("✅ Detected JPEG image format!")
+                st.image(file_path, use_container_width=True)
+            else:
+                st.info("🔍 File format not immediately recognized as standard image format")
+                
+        except Exception as e:
+            st.error(f"❌ Error analyzing data warehousing file: {str(e)}")
+            log_activity("ERROR", "Flowcharts", f"Failed to load data warehousing file: {str(e)}")
+        
+        # Data Architecture concepts
+        st.markdown("---")
+        st.markdown("### 📚 Data Architecture Concepts")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **🏛️ Traditional Data Warehouse:**
+            - Centralized repository for structured data
+            - ETL processes for data transformation  
+            - Star/Snowflake schema design
+            - OLAP cubes for analytical queries
+            - Batch processing workflows
+            """)
+            
+        with col2:
+            st.markdown("""
+            **☁️ Modern Data Lake Architecture:**
+            - Raw data storage in native formats
+            - Schema-on-read flexibility
+            - Support for structured, semi-structured, and unstructured data
+            - Real-time streaming capabilities
+            - Machine learning integration
+            """)
+    
+    with tab3:
+        st.subheader("🔌 API Architecture & Design Patterns")
+        st.markdown("API design patterns and architectural flows")
+        
+        # API files selection
+        api_files = ["api.gif", "api2.gif"]
+        selected_api = st.selectbox("Select API Diagram:", api_files)
+        
+        try:
+            file_path = f"/home/gee_devops254/Downloads/Data Architecture Enginnering ingestion/Pictures/{selected_api}"
+            
+            st.markdown(f"### 🔌 API Architecture - {selected_api}")
+            st.image(file_path, use_container_width=True)
+            
+            # Provide download option
+            with open(file_path, "rb") as file:
+                btn = st.download_button(
+                    label=f"📥 Download {selected_api}",
+                    data=file.read(),
+                    file_name=selected_api,
+                    mime="image/gif"
+                )
+                
+        except Exception as e:
+            st.error(f"❌ Error loading API diagram: {str(e)}")
+            log_activity("ERROR", "Flowcharts", f"Failed to load {selected_api}: {str(e)}")
+        
+        # API Architecture patterns
+        st.markdown("---")
+        st.markdown("### 🏗️ API Architecture Patterns")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **🔄 RESTful API Design:**
+            - Resource-based URL structure
+            - HTTP methods (GET, POST, PUT, DELETE)
+            - Stateless communication
+            - JSON data format
+            - Standard HTTP status codes
+            """)
+            
+            st.markdown("""
+            **📡 GraphQL Architecture:**
+            - Single endpoint for all queries
+            - Client-specified data requirements
+            - Strong type system
+            - Real-time subscriptions
+            - Reduced over-fetching
+            """)
+            
+        with col2:
+            st.markdown("""
+            **⚡ Event-Driven APIs:**
+            - Asynchronous communication
+            - Pub/Sub messaging patterns
+            - Event sourcing capabilities
+            - Microservices integration
+            - Real-time data streaming
+            """)
+            
+            st.markdown("""
+            **🔐 API Security Patterns:**
+            - OAuth 2.0 / JWT authentication
+            - Rate limiting and throttling
+            - Input validation and sanitization
+            - HTTPS/TLS encryption
+            - API versioning strategies
+            """)
+        
+        # API Performance metrics
+        st.markdown("---")
+        st.subheader("📊 API Performance Insights")
+        
+        # Sample API metrics visualization
+        api_metrics = pd.DataFrame({
+            'endpoint': ['/users', '/orders', '/products', '/analytics', '/auth'],
+            'requests_per_second': [1200, 800, 2000, 300, 500],
+            'avg_response_time_ms': [45, 120, 35, 200, 80],
+            'success_rate': [99.9, 99.5, 99.8, 99.2, 99.7]
+        })
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_rps = px.bar(api_metrics, x='endpoint', y='requests_per_second', 
+                           title='API Requests per Second by Endpoint')
+            st.plotly_chart(fig_rps, use_container_width=True)
+            
+        with col2:
+            fig_response = px.scatter(api_metrics, x='requests_per_second', y='avg_response_time_ms',
+                                    size='success_rate', hover_data=['endpoint'],
+                                    title='Response Time vs Request Volume')
+            st.plotly_chart(fig_response, use_container_width=True)
+
 
 if __name__ == "__main__":
     main()
